@@ -204,7 +204,6 @@ class MineRLEnv(gym.Env):
         with open(self.xml_file, 'r') as f:
             xml = f.read()
         # Todo: This will fail when using a remote instance manager.
-        # specifically check if missions_dir is a remote path
 
         xml = xml.replace('$(MISSIONS_DIR)', missions_dir)
 
@@ -264,6 +263,8 @@ class MineRLEnv(gym.Env):
         self.xml.find(self.ns + 'ExperimentUID').text = self.exp_uid
         fileworld_path = self.xml.find( './/' + self.ns + 'FileWorldGenerator').attrib['src']
         if not os.path.isabs(fileworld_path):
+            # If the path for the FileWorldGenerator is a relative path,
+            # assume it to be relative to the xml file itself
             xml_directory = os.path.dirname(self.xml_file)
             new_fileworld_path = os.path.join(xml_directory, fileworld_path)
             self.xml.find('.//' + self.ns + 'FileWorldGenerator').attrib['src'] = new_fileworld_path
