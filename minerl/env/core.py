@@ -261,13 +261,15 @@ class MineRLEnv(gym.Env):
         self.xml = e
         self.xml.find(self.ns + 'ClientRole').text = str(self.role)
         self.xml.find(self.ns + 'ExperimentUID').text = self.exp_uid
-        fileworld_path = self.xml.find( './/' + self.ns + 'FileWorldGenerator').attrib['src']
-        if not os.path.isabs(fileworld_path):
-            # If the path for the FileWorldGenerator is a relative path,
-            # assume it to be relative to the xml file itself
-            xml_directory = os.path.dirname(self.xml_file)
-            new_fileworld_path = os.path.join(xml_directory, fileworld_path)
-            self.xml.find('.//' + self.ns + 'FileWorldGenerator').attrib['src'] = new_fileworld_path
+        file_world_generator = self.xml.find( './/' + self.ns + 'FileWorldGenerator')
+        if file_world_generator is not None:
+            fileworld_path = file_world_generator.attrib['src']
+            if not os.path.isabs(fileworld_path):
+                # If the path for the FileWorldGenerator is a relative path,
+                # assume it to be relative to the xml file itself
+                xml_directory = os.path.dirname(self.xml_file)
+                new_fileworld_path = os.path.join(xml_directory, fileworld_path)
+                self.xml.find('.//' + self.ns + 'FileWorldGenerator').attrib['src'] = new_fileworld_path
         if self.role != 0 and self.agent_count > 1:
             e = etree.Element(self.ns + 'MinecraftServerConnection',
                               attrib={'address': self.instance.host,
