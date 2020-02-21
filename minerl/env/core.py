@@ -321,6 +321,9 @@ class MineRLEnv(gym.Env):
         else:
             info = {}
 
+        # FIXME
+        # return info
+
         # Process Info: (HotFix until updated in Malmo.)
         if "inventory" in info and "inventory" in self.observation_space.spaces:
             inventory_spaces = self.observation_space.spaces['inventory'].spaces
@@ -347,7 +350,6 @@ class MineRLEnv(gym.Env):
             # logger.warning(info)
             pass
 
-
         info['pov'] = pov
 
         def correction(out):
@@ -370,8 +372,7 @@ class MineRLEnv(gym.Env):
                 return info_dict
 
         obs_dict = process_dict(self.observation_space, info)
-
-        self._last_pov = obs_dict['pov']
+        self._last_pov = obs_dict['pov'] if 'pov' in self.observation_space.spaces else obs_dict['povs']
         return obs_dict
 
     def _process_action(self, action_in) -> str:
