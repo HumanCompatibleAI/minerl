@@ -347,7 +347,6 @@ class MineRLEnv(gym.Env):
             # logger.warning(info)
             pass
 
-
         info['pov'] = pov
 
         def correction(out):
@@ -450,7 +449,7 @@ class MineRLEnv(gym.Env):
             self.done = False
             return self._peek_obs()
         except (socket.timeout, socket.error) as e:
-            logger.error("Failed to reset (socket error), trying again!")
+            self.log_error("Failed to reset (socket error), trying again!")
             self._clean_connection()
             raise e
         except RuntimeError as e:
@@ -460,7 +459,7 @@ class MineRLEnv(gym.Env):
             raise e
 
     def _clean_connection(self):
-        logger.error("Cleaning connection! Something must have gone wrong.")
+        self.log_error("Cleaning connection! Something must have gone wrong.")
         try:
             if self.client_socket:
                 self.client_socket.shutdown(socket.SHUT_RDWR)
@@ -472,7 +471,7 @@ class MineRLEnv(gym.Env):
         self.client_socket = None
         if self.had_to_clean:
             # Connect to a new instance!!
-            logger.error(
+            self.log_error(
                 "Connection with Minecraft client cleaned more than once; restarting.")
             if self.instance:
                 self.instance.kill()
@@ -569,7 +568,7 @@ class MineRLEnv(gym.Env):
             # If the socket times out some how! We need to catch this and reset the environment.
             self._clean_connection()
             self.done = True
-            logger.error(
+            self.log_error(
                 "Failed to take a step (timeout or error). Terminating episode and sending random observation, be aware. "
                 "To account for this failure case in your code check to see if `'error' in info` where info is "
                 "the info dictionary returned by the step function.")
@@ -707,12 +706,34 @@ class MineRLEnv(gym.Env):
                 num_retries += 1
                 if num_retries > MAX_WAIT:
                     raise socket.timeout()
-                logger.debug("Recieved a MALMOBUSY from Malmo; trying again.")
+                self.log_error("Did not get an OK from Malmo; trying again.")
                 time.sleep(1)
 
 
     def _get_token(self):
         return self.exp_uid + ":" + str(self.role) + ":" + str(self.resets)
+
+    def log_error(self, msg, num_lines=5):
+        lines = self._get_logs(num_lines=num_lines)
+        logger.error(msg)
+        logger.error('Last {} lines of the log file:'.format(len(lines)))
+        for line in lines:
+            logger.error(line)
+
+    def print_logs(self, num_lines=5):
+        lines = self._get_logs(num_lines=num_lines)
+        print('Last {} lines of the log file:'.format(len(lines)))
+        for line in lines:
+            print(line)
+
+    def _get_logs(self, num_lines=5):
+        if not (self.instance and self.instance.minecraft_dir):
+            print('Warning: Cannot print logs, as there is no launched instance')
+            return
+
+        log_file = os.path.join(self.instance.minecraft_dir, 'run', 'logs', 'latest.log')
+        print(log_file)
+        return tail(log_file, lines=num_lines)
 
 
 def make():
@@ -735,3 +756,22 @@ def _bind(instance, func, as_name=None):
     bound_method = func.__get__(instance, instance.__class__)
     setattr(instance, as_name, bound_method)
     return bound_method
+
+def tail(filename, lines=1, _buffer=4098):
+    """Tail a file and get X lines from the end"""
+    with open(filename, "r") as f:
+        lines_found = []
+        block_counter = 1
+        while len(lines_found) < lines:
+            try:
+                f.seek(-block_counter * _buffer, os.SEEK_END)
+            except IOError:  # either file is too small, or too many lines requested
+                f.seek(0)
+                lines_found = f.readlines()
+                break
+
+            lines_found = f.readlines()
+            # Exponential search: get twice as many blocks next iteration
+            block_counter *= 2
+
+    return lines_found[-lines:]
