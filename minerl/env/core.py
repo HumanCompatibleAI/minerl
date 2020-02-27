@@ -328,7 +328,7 @@ class MineRLEnv(gym.Env):
                 handler_fn = self.obs_handlers[key]
                 obs_dict[key] = handler_fn(info, obs_space)
         except KeyError:
-            print(f"Could not find handler for observation space {key}, returning empty.")
+            print("Could not find handler for observation space {}, returning empty.".format(key))
             return {}
 
         return obs_dict
