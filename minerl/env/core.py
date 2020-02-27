@@ -40,7 +40,7 @@ from lxml import etree
 from minerl.env import comms
 from minerl.env.comms import retry
 from minerl.env.malmo import InstanceManager, malmo_version, launch_queue_logger_thread
-from minerl.env.observations import observation_creator
+from minerl.env.observations import pov_observation, inventory_observation
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +100,18 @@ class MineRLEnv(gym.Env):
     metadata = {'render.modes': ['rgb_array', 'human']}
 
     STEP_OPTIONS = 0
+    DEFAULT_OBS_HANDLERS = {
+        'pov': pov_observation,
+        'inventory': inventory_observation,
+    }
 
     def __init__(self, xml, observation_space, action_space, port=None,
                  noop_action=None, docstr=None, obs_handlers=None):
         self.action_space = None
         self.observation_space = None
-        self.obs_handlers = obs_handlers
+        self.obs_handlers = deepcopy(self.DEFAULT_OBS_HANDLERS)
+        if obs_handlers is not None:
+            self.obs_handlers.update(obs_handlers)
         self._default_action = noop_action
 
         self.viewer = None
@@ -312,11 +318,19 @@ class MineRLEnv(gym.Env):
             info = json.loads(info)
         else:
             info = {}
-        info['pov'] = pov
+        info['pov'] = self._last_pov = pov
 
-        obs_dict = observation_creator(self.observation_space, info, extra_handlers=self.obs_handlers)
-        self._last_pov = obs_dict['pov'] if 'pov' in self.observation_space.spaces \
-            else np.zeros((self.depth, self.width, self.height))
+        obs_space = deepcopy(self.observation_space.spaces)
+        obs_dict = {}
+
+        try:
+            for key in obs_space:
+                handler_fn = self.obs_handlers[key]
+                obs_dict[key] = handler_fn(info, obs_space)
+        except KeyError:
+            print(f"Could not find handler for observation space {key}, returning empty.")
+            return {}
+
         return obs_dict
 
     def _process_action(self, action_in) -> str:

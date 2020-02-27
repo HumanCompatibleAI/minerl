@@ -82,35 +82,3 @@ def inventory_observation(info, obs_space):
         print("Inventory information could not be found, returning empty inventory.")
 
     return inventory_dict
-
-
-def observation_creator(observation_space, info, extra_handlers=None):
-    """
-    Parses through the requested observation spaces and attempts to create each requested observation
-        from handlers defined in this file, using the given info dict.
-    
-    :param observation_space: Gym/MineRL observation space.
-    :param info: Python dict.
-    :param extra_handlers: Any extra functions to be used in decoding the observation space.
-    :return: Python dict with one index corresponding to each index in the observation space that has
-        an associated handler.
-    """
-    obs_space = deepcopy(observation_space.spaces)
-    obs_dict = {}
-
-    handlers = {
-        'pov': pov_observation,
-        'inventory': inventory_observation,
-    }
-    if extra_handlers is not None:
-        handlers.update(extra_handlers)
-
-    for key, handler_fn in handlers.items():
-        if key in obs_space:
-            obs_dict[key] = handler_fn(info, obs_space)
-            del(obs_space[key])
-
-    if not bool(observation_space):
-        print("Warning: Some observation spaces exist for which there aren't handlers!")
-
-    return obs_dict
