@@ -40,11 +40,11 @@ from lxml import etree
 from minerl.env import comms
 from minerl.env.comms import retry
 from minerl.env.malmo import InstanceManager, malmo_version, launch_queue_logger_thread
+from minerl.env.observations import pov_observation, inventory_observation
 
 logger = logging.getLogger(__name__)
 
 missions_dir = os.path.join(os.path.dirname(__file__), 'missions')
-
 
 
 class EnvException(Exception):
@@ -73,6 +73,7 @@ MAX_WAIT = 80  # After this many MALMO_BUSY's a timeout exception will be thrown
 SOCKTIME = 60.0 * 4  # After this much time a socket exception will be thrown.
 MINERL_CUSTOM_ENV_ID = 'MineRLCustomEnv' # Default id for a MineRLEnv
 
+
 class MineRLEnv(gym.Env):
     """The MineRLEnv class.
 
@@ -99,10 +100,18 @@ class MineRLEnv(gym.Env):
     metadata = {'render.modes': ['rgb_array', 'human']}
 
     STEP_OPTIONS = 0
+    DEFAULT_OBS_HANDLERS = {
+        'pov': pov_observation,
+        'inventory': inventory_observation,
+    }
 
-    def __init__(self, xml, observation_space, action_space, port=None, noop_action=None, docstr=None):
+    def __init__(self, xml, observation_space, action_space, port=None,
+                 noop_action=None, docstr=None, obs_handlers=None):
         self.action_space = None
         self.observation_space = None
+        self.obs_handlers = deepcopy(self.DEFAULT_OBS_HANDLERS)
+        if obs_handlers is not None:
+            self.obs_handlers.update(obs_handlers)
         self._default_action = noop_action
 
         self.viewer = None
@@ -114,7 +123,6 @@ class MineRLEnv(gym.Env):
         self.resets = 0
         self.ns = '{http://ProjectMalmo.microsoft.com}'
         self.client_socket = None
-
 
         self.exp_uid = ""
         self.done = True
@@ -132,9 +140,7 @@ class MineRLEnv(gym.Env):
         self._already_closed = False
         self.instance = self._get_new_instance(port)
 
-
         self._setup_spaces(observation_space, action_space)
-
 
         self.resets = 0
         self.done = True
@@ -155,7 +161,6 @@ class MineRLEnv(gym.Env):
         instance.launch()
         return instance
 
-
     def _setup_spaces(self, observation_space, action_space):
         self.action_space = action_space
         self.observation_space = observation_space
@@ -169,8 +174,8 @@ class MineRLEnv(gym.Env):
                 try:
                     return space.default()
                 except NameError:
-                    raise ValueError(
-                        'Specify non-None default_action in gym.register or extend all action spaces with default() method')
+                    raise ValueError('Specify non-None default_action in gym.register or extend all '
+                                     'action spaces with default() method')
         if self._default_action is None:
             self._default_action = {key: map_space(
                 space) for key, space in action_space.spaces.items()}
@@ -181,17 +186,11 @@ class MineRLEnv(gym.Env):
         boundmethd = _bind(self.action_space, noop_func)
         self.action_space.noop = boundmethd
 
-
     def init(self):
         """Initializes the MineRL Environment.
 
         Note:
             This is called automatically when the environment is made.
-
-        Args:
-            observation_space (gym.Space): The observation for the environment.
-            action_space (gym.Space): The action space for the environment.
-            port (int, optional): The port of an exisitng Malmo environment. Defaults to None.
 
         Raises:
             EnvException: If the Mission XML is malformed this is thrown.
@@ -228,7 +227,6 @@ class MineRLEnv(gym.Env):
         else:
             self.exp_uid = exp_uid
 
-        
         # Force single agent
         self.agent_count = 1
         turn_based = self.xml.find(
@@ -261,7 +259,7 @@ class MineRLEnv(gym.Env):
         self.xml = e
         self.xml.find(self.ns + 'ClientRole').text = str(self.role)
         self.xml.find(self.ns + 'ExperimentUID').text = self.exp_uid
-        file_world_generator = self.xml.find( './/' + self.ns + 'FileWorldGenerator')
+        file_world_generator = self.xml.find('.//' + self.ns + 'FileWorldGenerator')
         if file_world_generator is not None:
             fileworld_path = file_world_generator.attrib['src']
             if not os.path.isabs(fileworld_path):
@@ -320,57 +318,19 @@ class MineRLEnv(gym.Env):
             info = json.loads(info)
         else:
             info = {}
+        info['pov'] = self._last_pov = pov
 
-        # Process Info: (HotFix until updated in Malmo.)
-        if "inventory" in info and "inventory" in self.observation_space.spaces:
-            inventory_spaces = self.observation_space.spaces['inventory'].spaces
+        obs_space = deepcopy(self.observation_space.spaces)
+        obs_dict = {}
 
-            items = inventory_spaces.keys()
-            inventory_dict = {k: 0 for k in inventory_spaces}
-            # TODO change to maalmo
-            for stack in info['inventory']:
-                if 'type' in stack and 'quantity' in stack:
-                    type_name = stack['type']
-                    if type_name == 'log2':
-                        type_name = 'log'
+        try:
+            for key in obs_space:
+                handler_fn = self.obs_handlers[key]
+                obs_dict[key] = handler_fn(info, obs_space)
+        except KeyError:
+            print("Could not find handler for observation space {}, returning empty.".format(key))
+            return {}
 
-                    try:
-                        inventory_dict[type_name] += stack['quantity']
-                    except ValueError:
-                        continue
-                    except KeyError:
-                        # We only care to observe what was specified in the space.
-                        continue
-            info['inventory'] = inventory_dict
-        elif "inventory" in self.observation_space.spaces and not "inventory" in info:
-            # logger.warning("No inventory found in malmo observation! Yielding empty inventory.")
-            # logger.warning(info)
-            pass
-
-        info['pov'] = pov
-
-        def correction(out):
-            if isinstance(out, dict) or isinstance(out, collections.OrderedDict):
-                for k in out:
-                    out[k] = correction(out)
-            else:
-                return out*0
-
-        def process_dict(space, info_dict):
-            if isinstance(space, gym.spaces.Dict):
-                out_dict = {}
-                for k in space.spaces:
-                    if k in info_dict:
-                        out_dict[k] = process_dict(space.spaces[k], info_dict[k])
-                    else:
-                        out_dict[k] = correction(space.spaces[k].sample())
-                return out_dict
-            else:
-                return info_dict
-
-        obs_dict = process_dict(self.observation_space, info)
-
-        self._last_pov = obs_dict['pov']
         return obs_dict
 
     def _process_action(self, action_in) -> str:
@@ -387,8 +347,8 @@ class MineRLEnv(gym.Env):
                 else:
                     assert isinstance(
                         action_in[act], str), "Enum action {} must be str or int".format(act)
-                    assert action_in[act] in self.action_space.spaces[act].values, "Invalid value for enum action {}, {}".format(
-                        act, action_in[act])
+                    assert action_in[act] in self.action_space.spaces[act].values, \
+                        "Invalid value for enum action {}, {}".format(act, action_in[act])
 
             elif isinstance(self.action_space.spaces[act], gym.spaces.Box):
                 subact = action_in[act]
@@ -483,6 +443,7 @@ class MineRLEnv(gym.Env):
 
     def _peek_obs(self):
         obs = None
+        info = None
         start_time = time.time()
         if not self.done:
             logger.debug("Peeking the client.")
@@ -569,7 +530,7 @@ class MineRLEnv(gym.Env):
             self._clean_connection()
             self.done = True
             self.log_error(
-                "Failed to take a step (timeout or error). Terminating episode and sending random observation, be aware. "
+                "Failed to take step (timeout or error). Terminating episode and sending random observation, be aware. "
                 "To account for this failure case in your code check to see if `'error' in info` where info is "
                 "the info dictionary returned by the step function.")
             return self.observation_space.sample(), 0, self.done, {"error": "Connection timed out!"}
@@ -578,6 +539,7 @@ class MineRLEnv(gym.Env):
         if self.viewer is None:
             from gym.envs.classic_control import rendering
             import pyglet
+
             class ScaledWindowImageViewer(rendering.SimpleImageViewer):
                 def __init__(self, width, height):
                     super().__init__(None, 640)
@@ -606,8 +568,7 @@ class MineRLEnv(gym.Env):
         return self.viewer.isopen
 
     def render(self, mode='human'):
-        if mode == 'human' and (
-            not 'AICROWD_IS_GRADING' in os.environ or os.environ['AICROWD_IS_GRADING'] is None):
+        if mode == 'human' and ('AICROWD_IS_GRADING' not in os.environ or os.environ['AICROWD_IS_GRADING'] is None):
             self._renderObs(self._last_pov)
         return self._last_pov
 
@@ -709,7 +670,6 @@ class MineRLEnv(gym.Env):
                 self.log_error("Did not get an OK from Malmo; trying again.")
                 time.sleep(1)
 
-
     def _get_token(self):
         return self.exp_uid + ":" + str(self.role) + ":" + str(self.resets)
 
@@ -757,14 +717,15 @@ def _bind(instance, func, as_name=None):
     setattr(instance, as_name, bound_method)
     return bound_method
 
-def tail(filename, lines=1, _buffer=4098):
+
+def tail(filename, lines=1, buffer=4098):
     """Tail a file and get X lines from the end"""
     with open(filename, "r") as f:
         lines_found = []
         block_counter = 1
         while len(lines_found) < lines:
             try:
-                f.seek(-block_counter * _buffer, os.SEEK_END)
+                f.seek(-block_counter * buffer, os.SEEK_END)
             except IOError:  # either file is too small, or too many lines requested
                 f.seek(0)
                 lines_found = f.readlines()
