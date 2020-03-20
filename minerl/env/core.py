@@ -30,6 +30,7 @@ import time
 import uuid
 from copy import copy, deepcopy
 from typing import Iterable
+from functools import partial
 
 import gym
 import gym.envs.registration
@@ -40,7 +41,7 @@ from lxml import etree
 from minerl.env import comms
 from minerl.env.comms import retry
 from minerl.env.malmo import InstanceManager, malmo_version, launch_queue_logger_thread
-from minerl.env.observations import pov_observation, inventory_observation
+from minerl.env.observations import pov_observation, inventory_observation, key_observation
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ class MineRLEnv(gym.Env):
     DEFAULT_OBS_HANDLERS = {
         'pov': pov_observation,
         'inventory': inventory_observation,
+        'compassAngle': partial(key_observation, key='compassAngle')
     }
 
     def __init__(self, xml, observation_space, action_space, port=None,
@@ -322,7 +324,6 @@ class MineRLEnv(gym.Env):
 
         obs_space = deepcopy(self.observation_space.spaces)
         obs_dict = {}
-
         try:
             for key in obs_space:
                 handler_fn = self.obs_handlers[key]
