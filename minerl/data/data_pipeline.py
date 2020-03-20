@@ -465,11 +465,8 @@ class DataPipeline:
             logger.debug("Caught windows error {} - this is expected when closing the data pool".format(e))
             return None
         except BrokenPipeError:
-            
-            print("Broken pipe!")
             return None
         except FileNotFoundError as e: 
-            print("File not found!")
             raise e
         except Exception as e:
             logger.debug("Exception \'{}\' caught on file \"{}\" by a worker of the data pipeline.".format(e, file_dir))
