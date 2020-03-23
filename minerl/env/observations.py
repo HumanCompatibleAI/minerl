@@ -51,6 +51,8 @@ def key_observation(info, obs_space, key):
 
 pov_observation = functools.partial(key_observation, key="pov")
 
+compass_observation = functools.partial(key_observation, key="compassAngle")
+
 
 def inventory_observation(info, obs_space):
     """
