@@ -30,6 +30,7 @@ import time
 import uuid
 from copy import copy, deepcopy
 from typing import Iterable
+from functools import partial
 
 import gym
 import gym.envs.registration
@@ -323,7 +324,6 @@ class MineRLEnv(gym.Env):
 
         obs_space = deepcopy(self.observation_space.spaces)
         obs_dict = {}
-
         try:
             for key in obs_space:
                 handler_fn = self.obs_handlers[key]
