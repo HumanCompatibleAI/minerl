@@ -41,7 +41,7 @@ from lxml import etree
 from minerl.env import comms
 from minerl.env.comms import retry
 from minerl.env.malmo import InstanceManager, malmo_version, launch_queue_logger_thread
-from minerl.env.observations import pov_observation, inventory_observation, key_observation
+from minerl.env.observations import pov_observation, inventory_observation, compass_observation
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class MineRLEnv(gym.Env):
     DEFAULT_OBS_HANDLERS = {
         'pov': pov_observation,
         'inventory': inventory_observation,
-        'compassAngle': partial(key_observation, key='compassAngle')
+        'compassAngle': compass_observation,
     }
 
     def __init__(self, xml, observation_space, action_space, port=None,
