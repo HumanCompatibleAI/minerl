@@ -343,13 +343,13 @@ class MineRLEnv(gym.Env):
         for act in action_in:
             # Process enums.
             if isinstance(self.action_space.spaces[act], minerl.env.spaces.Enum):
-                if isinstance(action_in[act], int):
+                if np.issubdtype(type(action_in[act]), np.integer):
                     action_in[act] = self.action_space.spaces[act].values[action_in[act]]
                 else:
                     assert isinstance(
-                        action_in[act], str), "Enum action {} must be str or int".format(act)
+                        action_in[act], str), "Enum action {} must be str or int. Value observed: {} ".format(act, action_in[act])
                     assert action_in[act] in self.action_space.spaces[act].values, \
-                        "Invalid value for enum action {}, {}".format(act, action_in[act])
+                        "Invalid string value for enum action {}, {}".format(act, action_in[act])
 
             elif isinstance(self.action_space.spaces[act], gym.spaces.Box):
                 subact = action_in[act]
