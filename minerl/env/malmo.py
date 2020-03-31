@@ -27,7 +27,8 @@ import pathlib
 import Pyro4.core
 import argparse
 from enum import Enum
- 
+
+import random
 import shutil
 import socket
 import struct
@@ -46,7 +47,6 @@ import psutil
 import Pyro4
 
 
-import random
 from minerl.env import comms
 
 logger = logging.getLogger(__name__)
@@ -273,19 +273,21 @@ class InstanceManager:
         # shwang: Unfortunately, this check doesn't account for the multiprocess
         # case where there are several instance pools. We leave it here despite
         # this because it is a quick way to avoid expensively launching a
-        # second instance on the same port.
+        # second instance on the same port from the same process.
         return port in [instance.port for instance in cls._instance_pool]
 
     @classmethod
     def _get_valid_port(cls):
-        return 9005
+        # We might run into a race condition where another Minecraft process (or any
+        # process for that matter) binds to this port before our instance can
+        # do so. Randomization decreases the chance of that happening in
+        # between different MineRL InstanceManagers.
+        #
+        # If we run into this sort of race condition, Minecraft will log a
+        # `java.BindException`, and MineRLEnv will request a new Minecraft
+        # instance if the port is unavailable upon launch.
         port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
         while cls._is_port_taken(port) or cls._port_in_instance_pool(port):
-            # TODO(shwang): I removed a reference to is_display_port_taken here.
-            # I'll make sure to explain why on my PR.
-            
-            # I don't know how to tell if a process needs to retry. If that happens,
-            # I'll just take the L, I guess.
             port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
         return port
 

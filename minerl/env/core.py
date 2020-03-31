@@ -712,6 +712,10 @@ class MineRLEnv(gym.Env):
         return tail(log_file, lines=num_lines)
 
 
+def make():
+    return Env()
+
+
 def register(id, **kwargs):
     # TODO create doc string based on registered envs
     return gym.envs.register(id, **kwargs)
