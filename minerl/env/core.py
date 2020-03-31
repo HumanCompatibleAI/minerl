@@ -698,9 +698,14 @@ class MineRLEnv(gym.Env):
         for line in lines:
             print(line)
 
-    def log_shows_bind_exception(self, num_lines=10):
+    def log_shows_bind_exception(self, num_lines=10, verbose=True):
         error_msg = 'java.net.BindException'
-        return any(error_msg in line for line in self._get_logs(num_lines))
+        for line in self._get_logs(num_lines):
+            if error_msg in line:
+                if verbose:
+                    print(f"Detected BindException (!): {line}")
+                return True
+        return False
 
     def _get_logs(self, num_lines=5):
         if not (self.instance and self.instance.minecraft_dir):
