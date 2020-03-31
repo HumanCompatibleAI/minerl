@@ -46,7 +46,7 @@ import psutil
 import Pyro4
 
 
-from random import Random
+import random
 from minerl.env import comms
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,11 @@ MAXRAND = 1000000
 
 INSTANCE_MANAGER_PYRO = 'minerl.instance_manager'
 MINERL_INSTANCE_MANAGER_REMOTE = 'MINERL_INSTANCE_MANAGER_REMOTE'
+
+# Unix empheral ports actually start lower, but the IANA standards are compatible
+# with Windows too.
+IANA_DYNAMIC_PORT_LOW = 49152
+IANA_DYNAMIC_PORT_HIGH = 65536
 
 @Pyro4.expose
 @Pyro4.behavior(instance_mode="single")
@@ -118,7 +123,7 @@ class InstanceManager:
             cls._seed_generator = seeds
         elif seed_type == SeedType.GENERATED:
             assert seeds is not None, "Seed set to generated seed, so initial seed must be specified."
-            cls._seed_generator = Random(seeds[0])
+            cls._seed_generator = random.Random(seeds[0])
         else:
             raise TypeError("Seed type {} not supported".format(seed_type))
         
@@ -260,29 +265,28 @@ class InstanceManager:
             ports = [x.laddr.port for x  in psutil.net_connections()]
             return port in ports
 
-    @staticmethod
-    def _is_display_port_taken(port, x11_path):
-        return False
-
     @classmethod
     def _port_in_instance_pool(cls, port):
         # Ideally, this should be covered by other cases, but there may be delay
         # in when the ports get "used"
+
+        # shwang: Unfortunately, this check doesn't account for the multiprocess
+        # case where there are several instance pools. We leave it here despite
+        # this because it is a quick way to avoid expensively launching a
+        # second instance on the same port.
         return port in [instance.port for instance in cls._instance_pool]
 
     @classmethod
-    def configure_malmo_base_port(cls, malmo_base_port):
-        """Configure the lowest or base port for Malmo"""
-        cls._malmo_base_port = malmo_base_port
-
-    @classmethod
     def _get_valid_port(cls):
-        malmo_base_port = cls._malmo_base_port
-        port = (cls.ninstances  % 5000) + malmo_base_port
-        while cls._is_port_taken(port) or \
-              cls._is_display_port_taken(port - malmo_base_port, cls.X11_DIR) or \
-              cls._port_in_instance_pool(port):
-            port += 1
+        return 9005
+        port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
+        while cls._is_port_taken(port) or cls._port_in_instance_pool(port):
+            # TODO(shwang): I removed a reference to is_display_port_taken here.
+            # I'll make sure to explain why on my PR.
+            
+            # I don't know how to tell if a process needs to retry. If that happens,
+            # I'll just take the L, I guess.
+            port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
         return port
 
 

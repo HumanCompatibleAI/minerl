@@ -668,8 +668,19 @@ class MineRLEnv(gym.Env):
                 num_retries += 1
                 if num_retries > MAX_WAIT:
                     raise socket.timeout()
-                self.log_error("Did not get an OK from Malmo; trying again.")
-                time.sleep(1)
+                elif self.log_shows_bind_exception():
+                    # Skips error handler to directly to abort.
+                    self.had_to_clean = True
+                    logger.error("Malmo server failed to bind to port, possibly due "
+                                 "to collision with parallel Malmo instance. "
+                                 "Giving up on contacting this Malmo server, and "
+                                 "starting a new one. It's possible that the abandoned Malmo "
+                                 "server cannot be closed automatically, and you will "
+                                 "have to do so manually later.")
+                    raise RuntimeError("Port is unusable")
+                else:
+                    self.log_error("Did not get an OK from Malmo; trying again.")
+                    time.sleep(1)
 
     def _get_token(self):
         return self.exp_uid + ":" + str(self.role) + ":" + str(self.resets)
@@ -687,6 +698,10 @@ class MineRLEnv(gym.Env):
         for line in lines:
             print(line)
 
+    def log_shows_bind_exception(self, num_lines=10):
+        error_msg = 'java.net.BindException'
+        return any(error_msg in line for line in self._get_logs(num_lines))
+
     def _get_logs(self, num_lines=5):
         if not (self.instance and self.instance.minecraft_dir):
             print('Warning: Cannot print logs, as there is no launched instance')
@@ -695,10 +710,6 @@ class MineRLEnv(gym.Env):
         log_file = os.path.join(self.instance.minecraft_dir, 'run', 'logs', 'latest.log')
         print(log_file)
         return tail(log_file, lines=num_lines)
-
-
-def make():
-    return Env()
 
 
 def register(id, **kwargs):
