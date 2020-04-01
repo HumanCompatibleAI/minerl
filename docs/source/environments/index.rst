@@ -17,7 +17,7 @@ environment!
     be evaluated in :code:`MineRLObtainDiamond-v0` which has **sparse** rewards. See `MineRLObtainDiamond-v0`_.
 
 .. note::
-    All environments offer a default no-op action via :code:`env.action_space.no_op()`
+    All environments offer a default no-op action via :code:`env.action_space.noop()`
     and a random action via :code:`env.action_space.sample()`
 
 .. include:: handlers.rst

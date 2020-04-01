@@ -174,6 +174,8 @@ class MineRLEnv(gym.Env):
                 return np.zeros(shape=space.shape, dtype=space.dtype)
             else:
                 try:
+                    # TODO(shwang): Confirmed -- no one uses space.default()
+                    # Nothing popped up after searches for "def default" and ".default".
                     return space.default()
                 except NameError:
                     raise ValueError('Specify non-None default_action in gym.register or extend all '
@@ -182,11 +184,16 @@ class MineRLEnv(gym.Env):
             self._default_action = {key: map_space(
                 space) for key, space in action_space.spaces.items()}
 
+        # TODO(shwang): AFAICT, .noop is .no_op but reimplemented with closures,
+        # and with a cached return value.
+
         def noop_func(a):
             return deepcopy(self._default_action)
 
-        boundmethd = _bind(self.action_space, noop_func)
-        self.action_space.noop = boundmethd
+        # TODO(shwang): Confirmed -- no one uses noop_func.
+        # boundmethd = _bind(self.action_space, noop_func)
+        # Unused!
+        # self.action_space.noop = boundmethd
 
     def init(self):
         """Initializes the MineRL Environment.
@@ -301,7 +308,10 @@ class MineRLEnv(gym.Env):
         Returns:
             Any: A no-op action in the env's space.
         """
-        return deepcopy(self._default_action)
+        # TODO(shwang): I'm a bit confused about why the code has 3 different
+        # ways to access the no_op action for action space, with at least 2
+        # duplicate implementations.
+        return self.action_space.noop()
 
     def _process_observation(self, pov, info):
         """

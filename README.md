@@ -38,8 +38,8 @@ done = False
 while not done:
     action = env.action_space.sample() 
  
-    # One can also take a no_op action with
-    # action =env.action_space.noop()
+    # One can also take a no-op action with
+    # action = env.action_space.noop()
     
  
     obs, reward, done, info = env.step(
