@@ -38,7 +38,7 @@ import gym.spaces
 import minerl.env.spaces
 import numpy as np
 from lxml import etree
-from minerl.env import comms
+from minerl.env import comms, malmo
 from minerl.env.comms import retry
 from minerl.env.malmo import InstanceManager, malmo_version, launch_queue_logger_thread
 from minerl.env.observations import pov_observation, inventory_observation, compass_observation
@@ -107,7 +107,7 @@ class MineRLEnv(gym.Env):
         'compassAngle': compass_observation,
     }
 
-    def __init__(self, xml, observation_space, action_space, port=None,
+    def __init__(self, xml, observation_space, action_space,
                  noop_action=None, docstr=None, obs_handlers=None):
         self.action_space = None
         self.observation_space = None
@@ -140,28 +140,47 @@ class MineRLEnv(gym.Env):
         self.had_to_clean = False
 
         self._already_closed = False
-        self.instance = self._get_new_instance(port)
+        self.instance = self._robust_launch_new_instance()
 
         self._setup_spaces(observation_space, action_space)
 
         self.resets = 0
         self.done = True
 
-    def _get_new_instance(self, port=None):
+    def _attempt_launch_new_instance(self):
+        """Returns a successfully launched Instance, or None if the launch had
+        an intermittent build error."""
+        instance = InstanceManager.get_instance(os.getpid())
+        if InstanceManager.is_remote():
+            launch_queue_logger_thread(instance, self.is_closed)
+
+        try:
+            instance.launch()
+        except malmo.IntermittentBuildError:
+            instance.kill()
+            instance = None
+        return instance
+
+    def _robust_launch_new_instance(self, *, max_tries=1) -> InstanceManager:
         """
         Gets a new instance and sets up a logger if need be. 
         """
-
-        if not port is None:
-            instance = InstanceManager.add_existing_instance(port)
-        else:
-            instance = InstanceManager.get_instance(os.getpid())
-        
-        if InstanceManager.is_remote():
-            launch_queue_logger_thread(instance, self.is_closed)
-        
-        instance.launch()
-        return instance
+        # Explain why I got rid of port option here.
+        # 1. The port option was actually broken (NameError)
+        # 2. We don't ever use the port and nothing seems to reference this.
+        # 3. If we need it in the future we can add it back in.
+        # 4. Not sure what the use case for this is.
+        for i in range(max_tries):
+            instance = self._attempt_launch_new_instance()
+            if instance is not None:
+                return instance
+            else:
+                logger.warning(f"Minecraft build or launch just failed on attempt {i}. "
+                               "This is probably an intermittent race condition. ",
+                               f"Trying again (max tries {max_tries}).")
+                time.sleep(3)
+        raise RuntimeError(f"Failed to build and launch Minecraft instance "
+                           f"{max_tries} times. Giving up.")
 
     def _setup_spaces(self, observation_space, action_space):
         self.action_space = action_space

@@ -76,6 +76,14 @@ MINERL_INSTANCE_MANAGER_REMOTE = 'MINERL_INSTANCE_MANAGER_REMOTE'
 IANA_DYNAMIC_PORT_LOW = 49152
 IANA_DYNAMIC_PORT_HIGH = 65536
 
+
+class IntermittentBuildError(Exception):
+    """Raised when Gradle build fails, likely due to race condition.
+
+    Args:
+        message (str): The exception message.
+    """
+
 @Pyro4.expose
 @Pyro4.behavior(instance_mode="single")
 class InstanceManager:
@@ -162,16 +170,16 @@ class InstanceManager:
             RuntimeError: No available instances and automatic allocation of instances is off.
         """
         # Find an available instance.
+        #
+        # shwang: MineRL environments never use instance pool.
+        # This seems to be a vestigal copy-paste from Malmo code.
         for inst in cls._instance_pool:
             if not inst.locked:
                 inst._acquire_lock(pid)
-    
-
                 if hasattr(cls, "_pyroDaemon"):
                     cls._pyroDaemon.register(inst)
-                    
-
                 return inst
+
         # Otherwise make a new instance if possible
         if cls.managed:
             if cls.MAXINSTANCES is None or cls.ninstances < cls.MAXINSTANCES:
@@ -219,6 +227,8 @@ class InstanceManager:
 
     @classmethod
     def add_existing_instance(cls, port):
+        # shwang: This function is never used by MineRL. You can tell because
+        # status_dir would NameError on the `instance = InstaceManager` line.
         assert cls._is_port_taken(port), "No Malmo mod utilizing the port specified."
         instance = InstanceManager.Instance(port=port, existing=True, status_dir=status_dir)
         cls._instance_pool.append(instance)
@@ -430,7 +440,7 @@ class InstanceManager:
 
             self._setup_logging()
             self._target_port = port
-            
+
         def launch(self):
             port = self._target_port
             self._starting = True
@@ -444,16 +454,16 @@ class InstanceManager:
                 shutil.copytree(os.path.join(InstanceManager.MINECRAFT_DIR), self.minecraft_dir)
                 shutil.copytree(os.path.join(InstanceManager.SCHEMAS_DIR), os.path.join(self.instance_dir, 'Schemas'))
 
-                    
                 # 0. Get PID of launcher.
                 parent_pid = os.getpid()
-                # 1. Launch minecraft process and 
-                self.minecraft_process=  self._launch_minecraft(
+
+                # 1. Launch minecraft process
+                self.minecraft_process = self._launch_minecraft(
                     port, 
                     InstanceManager.headless,
                     self.minecraft_dir)
+                self.running = True
 
-               
                 # 2. Create a watcher process to ensure things get cleaned up
                 self.watcher_process, update_port = self._launch_process_watcher(
                     parent_pid, self.minecraft_process.pid, self.host, port, self.instance_dir)
@@ -461,8 +471,6 @@ class InstanceManager:
                 # wait until Minecraft process has outputed "CLIENT enter state: DORMANT"
                 lines = []
                 client_ready = False
-                server_ready = False
-
 
                 while True:
                     mine_log_encoding = locale.getpreferredencoding(False)
@@ -484,7 +492,6 @@ class InstanceManager:
                     
                     lines.append(line)
                     self._logger.debug("\n".join(line.split("\n")[:-1]))
-                    
 
                     MALMOENVPORTSTR =  "***** Start MalmoEnvServer on port " 
                     port_received = MALMOENVPORTSTR in line
@@ -493,10 +500,8 @@ class InstanceManager:
                         # Send an update to the watcher process.
                         update_port(self._port)
                         
-                    client_ready =  "CLIENT enter state: DORMANT" in line
-                    server_ready =  "SERVER enter state: DORMANT" in line
-
-                    if  client_ready:
+                    client_ready = "CLIENT enter state: DORMANT" in line
+                    if client_ready:
                         break
                 
                 if not self.port:
@@ -552,13 +557,9 @@ class InstanceManager:
                 self._logger_thread = threading.Thread(target=functools.partial(log_to_file, logdir=logdir))
                 self._logger_thread.setDaemon(True)
                 self._logger_thread.start()
-
-
             else:
                 assert port is not None, "No existing port specified."
                 self._port = port
-
-            self.running = True
 
             self._starting = False
 
@@ -691,7 +692,8 @@ class InstanceManager:
                 sock.close()
                 return ok == 1
             except Exception as e:
-                logger.error("Attempted to send kill command to minecraft process and failed.")
+                logger.error("Failed to send Exit command to minecraft process via socket: "
+                             f"{e}")
                 return False
 
         def __del__(self):
@@ -717,9 +719,10 @@ class InstanceManager:
                 except:
                     print("Failed to delete the temporary minecraft directory.")
 
-                if self._kill_minecraft_via_malmoenv(self.host, self.port):
-                    # Let the minecraft process term on its own terms.
-                    time.sleep(2)
+                if self.host is not None and self.port is not None:
+                    if self._kill_minecraft_via_malmoenv(self.host, self.port):
+                        # Let the minecraft process term on its own terms.
+                        time.sleep(2)
 
                 # Now lets try and end the process if anything is laying around
                 try:
@@ -732,7 +735,6 @@ class InstanceManager:
                 if self in InstanceManager._instance_pool:
                     InstanceManager._instance_pool.remove(self)
                     self.release_lock()
-            pass
 
         
         def __repr__(self):
@@ -754,8 +756,11 @@ class InstanceManager:
 
 
 def _check_for_launch_errors(line):
+    if "java.io.IOException: Corrupted pack file" in line:
+        raise IntermittentBuildError("Gradle build error."
+                                     "Probably a race from starting up many environments at once.")
     if "at org.lwjgl.opengl.Display.<clinit>" in line:
-        raise  RuntimeError(
+        raise RuntimeError(
             "ERROR! MineRL could not detect an X Server, Monitor, or Virtual Monitor! "
             "\n"
             "\n"
