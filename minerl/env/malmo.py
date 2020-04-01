@@ -228,7 +228,7 @@ class InstanceManager:
     @classmethod
     def add_existing_instance(cls, port):
         # shwang: This function is never used by MineRL. You can tell because
-        # status_dir would NameError on the `instance = InstaceManager` line.
+        # status_dir would NameError on the `instance = InstanceManager` line.
         assert cls._is_port_taken(port), "No Malmo mod utilizing the port specified."
         instance = InstanceManager.Instance(port=port, existing=True, status_dir=status_dir)
         cls._instance_pool.append(instance)

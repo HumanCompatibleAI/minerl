@@ -161,15 +161,8 @@ class MineRLEnv(gym.Env):
             instance = None
         return instance
 
-    def _robust_launch_new_instance(self, *, max_tries=1) -> InstanceManager:
-        """
-        Gets a new instance and sets up a logger if need be. 
-        """
-        # Explain why I got rid of port option here.
-        # 1. The port option was actually broken (NameError)
-        # 2. We don't ever use the port and nothing seems to reference this.
-        # 3. If we need it in the future we can add it back in.
-        # 4. Not sure what the use case for this is.
+    def _robust_launch_new_instance(self, *, max_tries=3) -> InstanceManager:
+        """Launch and return a new InstanceManager. Attempt up to `max_tries` times."""
         for i in range(max_tries):
             instance = self._attempt_launch_new_instance()
             if instance is not None:
