@@ -11,7 +11,7 @@ def gen_obtain_debug_actions(env):
     actions = []
 
     def act(**kwargs):
-        action = env.action_space.no_op()
+        action = env.action_space.noop()
         for key, value in kwargs.items():
             action[key] = value
         actions.append(action)
@@ -91,7 +91,7 @@ def test_env(environment='MineRLObtainTest-v0'):
                 break
 
         while not done:
-            obs, reward, done, info = env.step(env.action_space.no_op())
+            obs, reward, done, info = env.step(env.action_space.noop())
             if reward != 0:
                 print(reward)
         print("MISSION DONE")

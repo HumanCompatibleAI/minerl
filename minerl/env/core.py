@@ -96,7 +96,6 @@ class MineRLEnv(gym.Env):
             observation_space (gym.Space): The observation for the environment.
             action_space (gym.Space): The action space for the environment.
             port (int, optional): The port of an exisitng Malmo environment. Defaults to None.
-            noop_action (Any, optional): The no-op action for the environment. This must be in the action_space. Defaults to None.
         """
     metadata = {'render.modes': ['rgb_array', 'human']}
 
@@ -108,13 +107,12 @@ class MineRLEnv(gym.Env):
     }
 
     def __init__(self, xml, observation_space, action_space,
-                 noop_action=None, docstr=None, obs_handlers=None):
-        self.action_space = None
-        self.observation_space = None
+                 docstr=None, obs_handlers=None):
+        self.action_space = action_space
+        self.observation_space = observation_space
         self.obs_handlers = deepcopy(self.DEFAULT_OBS_HANDLERS)
         if obs_handlers is not None:
             self.obs_handlers.update(obs_handlers)
-        self._default_action = noop_action
 
         self.viewer = None
 
@@ -141,8 +139,6 @@ class MineRLEnv(gym.Env):
 
         self._already_closed = False
         self.instance = self._robust_launch_new_instance()
-
-        self._setup_spaces(observation_space, action_space)
 
         self.resets = 0
         self.done = True
@@ -174,31 +170,6 @@ class MineRLEnv(gym.Env):
                 time.sleep(3)
         raise RuntimeError(f"Failed to build and launch Minecraft instance "
                            f"{max_tries} times. Giving up.")
-
-    def _setup_spaces(self, observation_space, action_space):
-        self.action_space = action_space
-        self.observation_space = observation_space
-
-        def map_space(space):
-            if isinstance(space, gym.spaces.Discrete) or isinstance(space, minerl.env.spaces.Enum):
-                return 0
-            elif isinstance(space, gym.spaces.Box):
-                return np.zeros(shape=space.shape, dtype=space.dtype)
-            else:
-                try:
-                    return space.default()
-                except NameError:
-                    raise ValueError('Specify non-None default_action in gym.register or extend all '
-                                     'action spaces with default() method')
-        if self._default_action is None:
-            self._default_action = {key: map_space(
-                space) for key, space in action_space.spaces.items()}
-
-        def noop_func(a):
-            return deepcopy(self._default_action)
-
-        boundmethd = _bind(self.action_space, noop_func)
-        self.action_space.noop = boundmethd
 
     def init(self):
         """Initializes the MineRL Environment.
@@ -301,19 +272,6 @@ class MineRLEnv(gym.Env):
         # print(etree.tostring(self.xml))
 
         self.has_init = True
-
-    def noop_action(self):
-        """Gets the no-op action for the environment.
-
-        In addition one can get the no-op/default action directly from the action space.
-
-            env.action_space.noop()
-
-
-        Returns:
-            Any: A no-op action in the env's space.
-        """
-        return deepcopy(self._default_action)
 
     def _process_observation(self, pov, info):
         """
