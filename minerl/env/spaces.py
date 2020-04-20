@@ -39,7 +39,7 @@ class Enum(gym.spaces.Discrete):
         """
         return super().sample()
 
-    def no_op(self) -> int:
+    def noop(self) -> int:
         return 0
 
     def __getitem__(self, action):
@@ -62,21 +62,21 @@ class Enum(gym.spaces.Discrete):
 
 
 class Box(gym.spaces.Box):
-    def no_op(self):
+    def noop(self):
         return np.zeros(shape=self.shape).astype(self.dtype)
 
 
 class Dict(gym.spaces.Dict):
-    def no_op(self):
-        return OrderedDict([(k, space.no_op()) for k, space in self.spaces.items()])
+    def noop(self):
+        return OrderedDict([(k, space.noop()) for k, space in self.spaces.items()])
 
 
 class Discrete(gym.spaces.Discrete):
-    def no_op(self):
+    def noop(self):
         return 0
 
 
 class MultiDiscrete(gym.spaces.MultiDiscrete):
-    def no_op(self):
+    def noop(self):
         return (np.zeros(self.nvec.shape)*self.nvec).astype(self.dtype)
 
