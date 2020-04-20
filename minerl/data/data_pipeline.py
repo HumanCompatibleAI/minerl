@@ -36,7 +36,6 @@ class DataPipeline:
                  num_workers: int,
                  worker_batch_size: int,
                  min_size_to_dequeue: int,
-                 epoch_size: None,
                  random_seed=42):
         """
         Sets up a tensorflow dataset to load videos from a given data directory.
@@ -56,7 +55,6 @@ class DataPipeline:
         self.number_of_workers = num_workers
         self.worker_batch_size = worker_batch_size
         self.size_to_dequeue = min_size_to_dequeue
-        self.epoch_size = epoch_size
         self.processing_pool = multiprocessing.Pool(self.number_of_workers)
         self._action_space = gym.envs.registration.spec(self.environment)._kwargs['action_space']
         self._observation_space = gym.envs.registration.spec(self.environment)._kwargs['observation_space']
@@ -130,7 +128,7 @@ class DataPipeline:
             "\nNOTE: The new method `DataPipeline.sarsd_iter` has a different return signature! "
             "\n\t  Please see how to use it @ http://www.minerl.io/docs/tutorials/data_sampling.html")
 
-    def sarsd_iter(self, num_epochs=-1, max_sequence_len=32, queue_size=None, seed=None, include_metadata=False):
+    def sarsd_iter(self, num_epochs=-1, max_sequence_len=32, queue_size=None, seed=None, include_metadata=False, epoch_size=None):
         """
         Returns a generator for iterating through (state, action, reward, next_state, is_terminal)
         tuples in the dataset.
@@ -158,8 +156,8 @@ class DataPipeline:
         if seed is not None:
             np.random.seed(seed)
         data_list = self._get_all_valid_recordings(self.data_dir)
-        if self.epoch_size is not None:
-            data_list = data_list[0:self.epoch_size]
+        if epoch_size is not None:
+            data_list = data_list[0:epoch_size]
 
         m = multiprocessing.Manager()
         if queue_size is not None:
