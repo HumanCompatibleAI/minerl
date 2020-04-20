@@ -56,7 +56,6 @@ class DataPipeline:
         self.worker_batch_size = worker_batch_size
         self.size_to_dequeue = min_size_to_dequeue
         self.processing_pool = multiprocessing.Pool(self.number_of_workers)
-
         self._action_space = gym.envs.registration.spec(self.environment)._kwargs['action_space']
         self._observation_space = gym.envs.registration.spec(self.environment)._kwargs['observation_space']
 
@@ -157,6 +156,8 @@ class DataPipeline:
         if seed is not None:
             np.random.seed(seed)
         data_list = self._get_all_valid_recordings(self.data_dir)
+        # if self.epoch_size is not None:
+        #     data_list = data_list[0:self.epoch_size]
 
         m = multiprocessing.Manager()
         if queue_size is not None:
