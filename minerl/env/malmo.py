@@ -552,7 +552,7 @@ class InstanceManager:
 
                         java_stdout_to_file_logger.info(linestr)
 
-                logdir = os.environ.get('MALMO_MINECRAFT_OUTPUT_LOGDIR', '/tmp/MineRL/')
+                logdir = os.environ.get('MALMO_MINECRAFT_OUTPUT_LOGDIR', '.')
                 self._logger_thread = threading.Thread(
                     target=functools.partial(malmo_java_stdout_log_to_file, logdir=logdir))
                 self._logger_thread.setDaemon(True)
