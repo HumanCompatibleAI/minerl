@@ -539,9 +539,6 @@ class InstanceManager:
                         if not line:
                             break
 
-                        # TODO(shwang): Note that I remove this part because it sets
-                        # mine_log_encoding to the same thing even before the
-                        # error.
                         linestr = line.decode(mine_log_encoding)
                         linestr = "\n".join(linestr.split("\n")[:-1])
                         if 'STDERR' in linestr or 'ERROR' in linestr:
