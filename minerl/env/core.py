@@ -406,7 +406,7 @@ class MineRLEnv(gym.Env):
                 "Connection with Minecraft client cleaned more than once; restarting.")
             if self.instance:
                 self.instance.kill()
-            self.instance = self._get_new_instance()
+            self.instance = self._robust_launch_new_instance()
                 
             self.had_to_clean = False
         else:
