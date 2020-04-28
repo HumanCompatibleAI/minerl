@@ -516,17 +516,18 @@ class InstanceManager:
                 # NB! there will be still logs under Malmo/Minecraft/run/logs
                 # FNULL = open(os.devnull, 'w')
                 # launch a logger process
-                def malmo_java_stdout_log_to_file(logdir):
+                MB = 1024 ** 2
+                def malmo_java_stdout_log_to_file(logdir, max_log_size=15*MB, n_backups=2):
                     os.makedirs(os.path.join(logdir, 'logs'), exist_ok=True)
                     log_path = os.path.join(logdir, 'logs',
                                             'mc_{}.log'.format(self._target_port))
                     self._logger.info("Logging Minecraft+Malmo java instance to {}".format(log_path))
 
-                    MB = 1024**2
                     direct_format = logging.Formatter('%(message)s')
+                    log_size_per_file = max_log_size / (n_backups + 1)
                     log_handler = logging.handlers.RotatingFileHandler(
-                        log_path, mode='w', maxBytes=5 * MB,
-                        backupCount=2, encoding=None, delay=0)
+                        log_path, mode='w', maxBytes=log_size_per_file,
+                        backupCount=n_backups, encoding=None, delay=0)
                     log_handler.setFormatter(direct_format)
                     java_stdout_to_file_logger = logging.getLogger('malmo_java_stdout')
                     java_stdout_to_file_logger.addHandler(log_handler)
