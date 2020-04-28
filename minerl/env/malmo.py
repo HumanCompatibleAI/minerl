@@ -20,6 +20,7 @@ import atexit
 import functools
 import locale
 import logging
+import logging.handlers
 import multiprocessing
 import os
 import traceback
@@ -481,7 +482,7 @@ class InstanceManager:
 
                     if not line:
                         # IF THERE WAS AN ERROR STARTING THE MC PROCESS
-                        # Print hte whole logs!
+                        # Print the whole logs!
                         error_str = ""
                         for l in lines:
                             spline = "\n".join(l.split("\n")[:-1])
@@ -508,53 +509,53 @@ class InstanceManager:
                     raise RuntimeError("Malmo failed to start the MalmoEnv server! Check the logs from the Minecraft process.");
                 self._logger.info("Minecraft process ready")
                  
-
                 if not port == self._port:
                     self._logger.warning("Tried to launch Minecraft on port {} but that port was taken, instead Minecraft is using port {}.".format(port, self.port))
+
                 # supress entire output, otherwise the subprocess will block
                 # NB! there will be still logs under Malmo/Minecraft/run/logs
                 # FNULL = open(os.devnull, 'w')
                 # launch a logger process
-                def log_to_file(logdir):
-                    if not os.path.exists(os.path.join(logdir, 'logs')):
-                            os.makedirs((os.path.join(logdir, 'logs')))
+                MB = 1024 ** 2
+                def malmo_java_stdout_log_to_file(logdir, max_log_size=15*MB, n_backups=2):
+                    os.makedirs(os.path.join(logdir, 'logs'), exist_ok=True)
+                    log_path = os.path.join(logdir, 'logs',
+                                            'mc_{}.log'.format(self._target_port))
+                    self._logger.info("Logging Minecraft+Malmo java instance to {}".format(log_path))
 
-                    file_path = os.path.join(logdir, 'logs', 'mc_{}.log'.format(self._target_port - 9000))
+                    direct_format = logging.Formatter('%(message)s')
+                    log_size_per_file = max_log_size / (n_backups + 1)
+                    log_handler = logging.handlers.RotatingFileHandler(
+                        log_path, mode='w', maxBytes=log_size_per_file,
+                        backupCount=n_backups, encoding=None, delay=0)
+                    log_handler.setFormatter(direct_format)
+                    java_stdout_to_file_logger = logging.getLogger('malmo_java_stdout')
+                    java_stdout_to_file_logger.addHandler(log_handler)
+                    java_stdout_to_file_logger.setLevel(logging.INFO)
 
-                    logger.info("Logging output of Minecraft to {}".format(file_path))
-
-                    mine_log = open(file_path, 'wb+')
-                    mine_log.truncate(0)
                     mine_log_encoding = locale.getpreferredencoding(False)
 
-                    try:
-                        while self.running:
-                            line = self.minecraft_process.stdout.readline()
-                            if not line:
-                                break
-                            
-                            try:
-                                linestr = line.decode(mine_log_encoding)
-                            except UnicodeDecodeError:
-                                mine_log_encoding = locale.getpreferredencoding(False)
-                                logger.error("UnicodeDecodeError, switching to default encoding")
-                                linestr = line.decode(mine_log_encoding)
-                            linestr = "\n".join(linestr.split("\n")[:-1])
-                            if 'STDERR' in linestr or 'ERROR' in linestr:
-                                # Opportune place to suppress harmless MC errors.
-                                if not ('hitResult' in linestr):
-                                    self._logger.error(linestr)
-                            elif 'LOGTOPY' in linestr:
-                                self._logger.info(linestr)
-                            else:
-                                self._logger.debug(linestr)
-                            mine_log.write(line)
-                            mine_log.flush()
-                    finally:
-                        mine_log.close()
-                    
+                    while self.running:
+                        line = self.minecraft_process.stdout.readline()
+                        if not line:
+                            break
+
+                        linestr = line.decode(mine_log_encoding)
+                        linestr = "\n".join(linestr.split("\n")[:-1])
+                        if 'STDERR' in linestr or 'ERROR' in linestr:
+                            # Opportune place to suppress harmless MC errors.
+                            if not ('hitResult' in linestr):
+                                self._logger.error(linestr)
+                        elif 'LOGTOPY' in linestr:
+                            self._logger.info(linestr)
+                        else:
+                            self._logger.debug(linestr)
+
+                        java_stdout_to_file_logger.info(linestr)
+
                 logdir = os.environ.get('MALMO_MINECRAFT_OUTPUT_LOGDIR', '.')
-                self._logger_thread = threading.Thread(target=functools.partial(log_to_file, logdir=logdir))
+                self._logger_thread = threading.Thread(
+                    target=functools.partial(malmo_java_stdout_log_to_file, logdir=logdir))
                 self._logger_thread.setDaemon(True)
                 self._logger_thread.start()
             else:
