@@ -532,6 +532,7 @@ class InstanceManager:
                     java_stdout_to_file_logger = logging.getLogger('malmo_java_stdout')
                     java_stdout_to_file_logger.addHandler(log_handler)
                     java_stdout_to_file_logger.setLevel(logging.INFO)
+                    java_stdout_to_file_logger.propagate = False
 
                     mine_log_encoding = locale.getpreferredencoding(False)
 
