@@ -6,6 +6,8 @@ import gym
 import sys
 import tqdm
 import numpy as np
+import psutil
+import pytest
 import logging
 
 logging.getLogger().setLevel(logging.DEBUG)
@@ -59,6 +61,29 @@ def _check_space(key, space, observation, correct_len):
         _check_shape(correct_len, space.shape, observation[key])
     else:
         assert False, "Unsupported dict type"
+
+
+def _child_count() -> int:
+    current_process = psutil.Process()
+    children = current_process.children()
+    return len(children)
+
+
+@pytest.mark.parametrize("enter_generator", [False, True])
+def test_data_pipeline_leak(enter_generator, max_allowed_procs_increase=20):
+    starting_procs = _child_count()
+    for n_gen in range(5):
+        data = minerl.data.make('MineRLNavigate-v0', data_dir="demonstrations")
+
+        if enter_generator:
+            generator = data.sarsd_iter()
+            next(generator)
+
+        print()
+        print(f"Building the {n_gen}th DataPipeline.")
+        print(f"We now have {_child_count()} child processes.")
+        assert _child_count() - starting_procs <= max_allowed_procs_increase
+
 
 
 def test_data(environment='MineRLObtainDiamond-v0'):
