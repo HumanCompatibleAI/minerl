@@ -1,6 +1,7 @@
 import time
 
 import minerl
+from minerl import util
 import itertools
 import gym
 import sys
@@ -63,15 +64,9 @@ def _check_space(key, space, observation, correct_len):
         assert False, "Unsupported dict type"
 
 
-def _child_count() -> int:
-    current_process = psutil.Process()
-    children = current_process.children()
-    return len(children)
-
-
 @pytest.mark.parametrize("enter_generator", [False, True])
 def test_data_pipeline_leak(enter_generator, max_allowed_procs_increase=20):
-    starting_procs = _child_count()
+    starting_procs = util.child_count()
     for n_gen in range(5):
         data = minerl.data.make('MineRLNavigate-v0')
 
@@ -81,8 +76,8 @@ def test_data_pipeline_leak(enter_generator, max_allowed_procs_increase=20):
 
         print()
         print(f"Building the {n_gen}th DataPipeline.")
-        print(f"We now have {_child_count()} child processes.")
-        assert _child_count() - starting_procs <= max_allowed_procs_increase
+        print(f"We now have {util.child_count()} child processes.")
+        assert util.child_count() - starting_procs <= max_allowed_procs_increase
 
 
 
