@@ -73,7 +73,7 @@ def _child_count() -> int:
 def test_data_pipeline_leak(enter_generator, max_allowed_procs_increase=20):
     starting_procs = _child_count()
     for n_gen in range(5):
-        data = minerl.data.make('MineRLNavigate-v0', data_dir="demonstrations")
+        data = minerl.data.make('MineRLNavigate-v0')
 
         if enter_generator:
             generator = data.sarsd_iter()
