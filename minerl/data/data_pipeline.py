@@ -55,7 +55,7 @@ class DataPipeline:
         self.number_of_workers = num_workers
         self.worker_batch_size = worker_batch_size
         self.size_to_dequeue = min_size_to_dequeue
-        self.processing_pool = multiprocessing.Pool(self.number_of_workers)
+
         self._action_space = gym.envs.registration.spec(self.environment)._kwargs['action_space']
         self._observation_space = gym.envs.registration.spec(self.environment)._kwargs['observation_space']
 
@@ -180,37 +180,38 @@ class DataPipeline:
             # for arg1, arg2, arg3 in files:
             #     DataPipeline._load_data_pyfunc(arg1, arg2, arg3)
             #     break
-            map_promise = self.processing_pool.starmap_async(DataPipeline._load_data_pyfunc, files, error_callback=None)
+            with multiprocessing.Pool(self.number_of_workers) as pool:
+                map_promise = pool.starmap_async(DataPipeline._load_data_pyfunc, files, error_callback=None)
 
-            # random_queue = PriorityQueue(maxsize=pool_size)
+                # random_queue = PriorityQueue(maxsize=pool_size)
 
-            # We map the files -> load_data -> batch_pool -> random shuffle -> yield.
-            while True:
-                try:
-                    sequence = data_queue.get_nowait()
-                    if include_metadata:
-                        observation_seq, action_seq, reward_seq, next_observation_seq, done_seq, meta = sequence
-                    else:
-                        observation_seq, action_seq, reward_seq, next_observation_seq, done_seq = sequence
+                # We map the files -> load_data -> batch_pool -> random shuffle -> yield.
+                while True:
+                    try:
+                        sequence = data_queue.get_nowait()
+                        if include_metadata:
+                            observation_seq, action_seq, reward_seq, next_observation_seq, done_seq, meta = sequence
+                        else:
+                            observation_seq, action_seq, reward_seq, next_observation_seq, done_seq = sequence
 
-                    # Wrap in dict
-                    gym_spec = gym.envs.registration.spec(self.environment)
+                        # Wrap in dict
+                        gym_spec = gym.envs.registration.spec(self.environment)
 
-                    observation_dict = DataPipeline.map_to_dict(observation_seq, gym_spec._kwargs['observation_space'])
-                    action_dict = DataPipeline.map_to_dict(action_seq, gym_spec._kwargs['action_space'])
-                    next_observation_dict = DataPipeline.map_to_dict(next_observation_seq, gym_spec._kwargs['observation_space'])
-                    
-                    if include_metadata:
-                        yield observation_dict, action_dict, reward_seq[0], next_observation_dict, done_seq[0], meta
-                    else:
-                        yield observation_dict, action_dict, reward_seq[0], next_observation_dict, done_seq[0]
-                
-                except Empty:
-                    if map_promise.ready():
-                        epoch += 1
-                        break
-                    else:
-                        time.sleep(0.1)
+                        observation_dict = DataPipeline.map_to_dict(observation_seq, gym_spec._kwargs['observation_space'])
+                        action_dict = DataPipeline.map_to_dict(action_seq, gym_spec._kwargs['action_space'])
+                        next_observation_dict = DataPipeline.map_to_dict(next_observation_seq, gym_spec._kwargs['observation_space'])
+
+                        if include_metadata:
+                            yield observation_dict, action_dict, reward_seq[0], next_observation_dict, done_seq[0], meta
+                        else:
+                            yield observation_dict, action_dict, reward_seq[0], next_observation_dict, done_seq[0]
+
+                    except Empty:
+                        if map_promise.ready():
+                            epoch += 1
+                            break
+                        else:
+                            time.sleep(0.1)
         logger.debug("Epoch complete.")
 
     def load_data(self, stream_name: str, skip_interval=0, include_metadata=False):
