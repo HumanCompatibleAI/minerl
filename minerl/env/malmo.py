@@ -27,9 +27,10 @@ import traceback
 import pathlib 
 import Pyro4.core
 import argparse
-from enum import Enum
 
 import random
+from enum import IntEnum
+ 
 import shutil
 import socket
 import struct
@@ -54,19 +55,31 @@ logger = logging.getLogger(__name__)
 
 malmo_version = "0.37.0"
 
-class SeedType(Enum):
+class SeedType(IntEnum):
     """The seed type for an instance manager.
     
     Values:
         0 - NONE: No seeding whatsoever.
         1 - CONSTANT: All envrionments have the same seed (the one specified 
-            to the instance manager)
+            to the instance manager) (or alist of seeds , separated)
         2 - GENERATED: All environments have different seeds generated from a single 
             random generator with the seed specified to the InstanceManager.
+        3 - SPECIFIED: Each instance is given a list of seeds. Specify this like
+            1,2,3,4;848,432,643;888,888,888
+            Each instance's seed list is separated by ; and each seed is separated by ,
     """
     NONE = 0
     CONSTANT = 1
     GENERATED = 2
+    SPECIFIED = 3
+
+
+
+    @classmethod
+    def get_index(cls, type):
+        return list(cls).index(type)
+
+        
 MAXRAND = 1000000
 
 INSTANCE_MANAGER_PYRO = 'minerl.instance_manager'
@@ -115,7 +128,7 @@ class InstanceManager:
     _seed_generator = None
 
     @classmethod
-    def _init_seeding(cls, seed_type=SeedType.NONE, seeds=None):
+    def _init_seeding(cls, seed_type=int(SeedType.NONE), seeds=None):
         """Sets the seeding type of the Instance manager object.
         
         Args:
@@ -125,21 +138,25 @@ class InstanceManager:
         Raises:
             TypeError: If the SeedType specified does not fall within the SeedType.
         """
-        if seed_type == SeedType.NONE:
+        seed_type = int(seed_type)
+        
+        if seed_type == (SeedType.NONE):
             assert seeds is None, "Seed type set to NONE, therefore seed cannot be set."
-        elif seed_type == SeedType.CONSTANT:
+        elif seed_type == (SeedType.CONSTANT):
             assert seeds is not None, "Seed set to constant seed, so seed must be specified."
-            cls._seed_generator = seeds
-        elif seed_type == SeedType.GENERATED:
+            cls._seed_generator = [int(x) for x in seeds.split(",") if x]
+        elif seed_type == (SeedType.GENERATED):
             assert seeds is not None, "Seed set to generated seed, so initial seed must be specified."
             cls._seed_generator = random.Random(seeds[0])
+        elif seed_type == (SeedType.SPECIFIED):
+            cls._seed_generator = ([[str(x) for x in s.split(",") if x] for s in seeds.split("-") if s])
         else:
             raise TypeError("Seed type {} not supported".format(seed_type))
         
         cls._seed_type  = seed_type
 
     @classmethod
-    def _get_next_seed(cls):
+    def _get_next_seed(cls, i=None):
         """Gets the next seed for an instance.
         
         Raises:
@@ -152,12 +169,20 @@ class InstanceManager:
             return cls._seed_generator
         elif cls._seed_type == SeedType.GENERATED:
             return [cls._seed_generator.randint(-MAXRAND, MAXRAND)]
+        elif cls._seed_type == SeedType.SPECIFIED:
+            try:
+                if i is None: 
+                    i = 0
+                    logger.warning("Trying to use specified seed type without specifying index id.")
+                return (cls._seed_generator[i])
+            except IndexError:
+                raise TypeError("Seed type {} ran out of seeds.".format(cls._seed_type))
         else:
             raise TypeError("Seed type {} does not support getting next seed".format(cls._seed_type))
 
 
     @classmethod
-    def get_instance(cls, pid):
+    def get_instance(cls, pid, instance_id=None):
         """
         Gets an instance from the instance manager. This method is a context manager
         and therefore when the context is entered the method yields a InstanceManager.Instance
@@ -174,16 +199,20 @@ class InstanceManager:
         #
         # shwang: MineRL environments never use instance pool.
         # This seems to be a vestigal copy-paste from Malmo code.
-        for inst in cls._instance_pool:
-            if not inst.locked:
-                inst._acquire_lock(pid)
-                if hasattr(cls, "_pyroDaemon"):
-                    cls._pyroDaemon.register(inst)
-                return inst
+        if not instance_id:
+            # Find an available instance.
+            for inst in cls._instance_pool:
+                if not inst.locked:
+                    inst._acquire_lock(pid)
+                    if hasattr(cls, "_pyroDaemon"):
+                        cls._pyroDaemon.register(inst)
+                    return inst
 
         # Otherwise make a new instance if possible
         if cls.managed:
             if cls.MAXINSTANCES is None or cls.ninstances < cls.MAXINSTANCES:
+                instance_id = cls.ninstances if instance_id is None else instance_id
+
                 cls.ninstances += 1
                 # Make the status directory.
 
@@ -194,7 +223,7 @@ class InstanceManager:
                 else:
                     status_dir = None
 
-                inst = cls.Instance(cls._get_valid_port(), status_dir=status_dir)
+                inst = cls.Instance(cls._get_valid_port(), status_dir=status_dir, instance_id=instance_id)
                 cls._instance_pool.append(inst)
                 inst._acquire_lock(pid)
 
@@ -231,7 +260,7 @@ class InstanceManager:
         # shwang: This function is never used by MineRL. You can tell because
         # status_dir would NameError on the `instance = InstanceManager` line.
         assert cls._is_port_taken(port), "No Malmo mod utilizing the port specified."
-        instance = InstanceManager.Instance(port=port, existing=True, status_dir=status_dir)
+        instance = InstanceManager.Instance(port=port, existing=True, status_dir=None)
         cls._instance_pool.append(instance)
         cls.ninstances += 1
         return instance
@@ -265,7 +294,7 @@ class InstanceManager:
                 s.bind((address, port))
                 taken = False
             except socket.error as e:
-                if e.errno in [98, 10048]:
+                if e.errno in [98, 10048, 48]:
                     taken = True
                 else:
                     raise e
@@ -298,8 +327,11 @@ class InstanceManager:
         # `java.BindException`, and MineRLEnv will request a new Minecraft
         # instance if the port is unavailable upon launch.
         port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
-        while cls._is_port_taken(port) or cls._port_in_instance_pool(port):
+        while (cls._is_port_taken(port) or
+                cls._is_display_port_taken(port - cls._malmo_base_port, cls.X11_DIR) or
+                cls._port_in_instance_pool(port)):
             port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
+
         return port
 
 
@@ -361,7 +393,7 @@ class InstanceManager:
         def on_terminate(proc):
             logger.info("Minecraft process {} terminated with exit code {}".format(proc, proc.returncode))
 
-        procs = process.children() + [process]
+        procs = process.children(recursive=True) + [process]
         
         # send SIGTERM
         for p in procs:
@@ -412,7 +444,7 @@ class InstanceManager:
         """
         MAX_PIPE_LENGTH = 500
 
-        def __init__(self, port=None, existing=False, status_dir=None, seed=None): 
+        def __init__(self, port=None, existing=False, status_dir=None, seed=None, instance_id=None): 
             """
             Launches the subprocess.
             """
@@ -420,7 +452,7 @@ class InstanceManager:
             self._starting = True
             self.minecraft_process = None
             self.watcher_process = None
-            self._port = None
+            self._port = port
             self._host = InstanceManager.DEFAULT_IP
             self.locked = False
             self.uuid = str(uuid.uuid4()).replace("-","")[:6]
@@ -430,10 +462,13 @@ class InstanceManager:
             self._status_dir = status_dir
             self.owner = None
 
+
+            self.instance_id = instance_id
+
             # Try to set the seed for the instance using the instance manager's override.
             try:
-                seed = InstanceManager._get_next_seed()
-            except TypeError:
+                seed = InstanceManager._get_next_seed(instance_id)
+            except TypeError as e:
                 pass
             finally:
                 # Even if the Instance manager does not override
@@ -442,7 +477,8 @@ class InstanceManager:
             self._setup_logging()
             self._target_port = port
 
-        def launch(self):
+
+        def launch(self, daemonize=False):
             port = self._target_port
             self._starting = True
 
@@ -452,7 +488,8 @@ class InstanceManager:
 
                 self.instance_dir = tempfile.mkdtemp()
                 self.minecraft_dir = os.path.join(self.instance_dir, 'Minecraft')
-                shutil.copytree(os.path.join(InstanceManager.MINECRAFT_DIR), self.minecraft_dir)
+                shutil.copytree(os.path.join(InstanceManager.MINECRAFT_DIR), self.minecraft_dir,
+                                ignore=shutil.ignore_patterns('cache.properties.lock'))
                 shutil.copytree(os.path.join(InstanceManager.SCHEMAS_DIR), os.path.join(self.instance_dir, 'Schemas'))
 
                 # 0. Get PID of launcher.
@@ -466,8 +503,12 @@ class InstanceManager:
                 self.running = True
 
                 # 2. Create a watcher process to ensure things get cleaned up
-                self.watcher_process, update_port = self._launch_process_watcher(
-                    parent_pid, self.minecraft_process.pid, self.host, port, self.instance_dir)
+                if not daemonize:
+                    self.watcher_process, update_port = self._launch_process_watcher(
+                        parent_pid, self.minecraft_process.pid, self.host, port, self.instance_dir)
+                else:
+                    update_port = lambda x: None
+
                 
                 # wait until Minecraft process has outputed "CLIENT enter state: DORMANT"
                 lines = []
@@ -566,7 +607,8 @@ class InstanceManager:
             self._starting = False
 
             # Make a hook to kill
-            atexit.register(lambda: self._destruct())
+            if not daemonize:
+                atexit.register(lambda: self._destruct())
 
         def kill(self):
             """
@@ -638,7 +680,7 @@ class InstanceManager:
             if self.status_dir:
                 cmd += ['-performanceDir', self.status_dir]
             if self._seed:
-                cmd += ['-seed', ",".join(self._seed)]
+                cmd += ['-seed', ",".join([str(x) for x in self._seed])]
 
             cmd_to_print = cmd[:] if not self._seed else cmd[:-2]
             self._logger.info("Starting Minecraft process: " + str(cmd_to_print))
@@ -646,7 +688,7 @@ class InstanceManager:
 
             if replaceable:
                 cmd.append('-replaceable')
-            preexec_fn = os.setsid if 'linux' in str(sys.platform) else None
+            preexec_fn = os.setsid if 'linux' in str(sys.platform) or sys.platform == 'darwin' else None
             # print(preexec_fn)
             minecraft_process = subprocess.Popen(cmd,
                 cwd=InstanceManager.MINECRAFT_DIR,
@@ -743,7 +785,7 @@ class InstanceManager:
             return ("Malmo[{}, proc={}, addr={}:{}, locked={}]".format(
                 self.uuid,
                 self.minecraft_process.pid if not self.existing else "EXISTING",
-                self.ip,
+                self.host,
                 self.port,
                 self.locked
             ))
@@ -831,15 +873,18 @@ def launch_instance_manager():
     # Todo: Use name servers in the docker contexct (set up a docker compose?)
     # pyro4-ns
     parser = argparse.ArgumentParser("python3 launch_instance_manager.py")
-    parser.add_argument("--seeds", nargs='+', default=None, 
+    parser.add_argument("--seeds", type=str, default=None, 
         help="The default seed for the environment.")
     parser.add_argument("--seeding_type", type=str, default=SeedType.CONSTANT, 
         help="The seeding type for the environment. Defaults to 1 (CONSTANT)"
              "if a seed specified, otherwise 0 (NONE): \n{}".format(SeedType.__doc__))
+
+    
     parser.add_argument("--max_instances", type=int, default=None,
         help="The maximum number of instances the instance manager is able to spawn,"
               "before an exception is thrown. Defaults to Unlimited.")
     opts = parser.parse_args()
+
     
     if opts.max_instances is not None:
         assert opts.max_instances > 0, "Maximum instances must be more than zero!"
@@ -861,7 +906,7 @@ def launch_instance_manager():
 
         # Initialize seeding.
         if opts.seeds is not None:
-            InstanceManager._init_seeding(seeds=list(opts.seeds), seed_type=opts.seeding_type)
+            InstanceManager._init_seeding(seeds=opts.seeds, seed_type=opts.seeding_type)
         else:
             InstanceManager._init_seeding(seed_type=SeedType.NONE)
 

@@ -1,6 +1,7 @@
 from copy import deepcopy
 import os
 import functools
+import np
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -85,3 +86,27 @@ def inventory_observation(info, obs_space):
         print("Inventory information could not be found, returning empty inventory.")
 
     return inventory_dict
+
+
+def mainhand_observation(info, obs_space):
+    """ TODO: THIS LOOKS DIFFERENT FROM MINERL MAIN, CHANGES TO CORE NEEDED."""
+    mainhand_dict = {}
+    try:
+        mainhand_dict['equipped_items.mainhand.type'] = info['equipped_items']['mainhand']['type']
+        mainhand_dict['equipped_items.mainhand.damage'] = np.array(info['equipped_items']['mainhand']['damage'])
+        mainhand_dict['equipped_items.mainhand.maxDamage'] = np.array(info['equipped_items']['mainhand']['maxDamage'])
+    except Exception as e:
+        if 'equipped_items' in info:
+            del info['equipped_items']
+
+    # bottom_env_spec = self.env_spec
+    # while isinstance(bottom_env_spec, EnvWrapper):
+    #     bottom_env_spec = bottom_env_spec.env_to_wrap
+
+    try:
+        if mainhand_dict['equipped_items.mainhand.type'] not in obs_space['equipped_items.mainhand.type']:
+            mainhand_dict['equipped_items.mainhand.type'] = "other"  # Todo: use handlers. TODO: USE THEM<
+    except Exception as e:
+        pass
+
+    return mainhand_dict

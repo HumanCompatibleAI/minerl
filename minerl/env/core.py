@@ -35,13 +35,15 @@ from functools import partial
 import gym
 import gym.envs.registration
 import gym.spaces
-import minerl.env.spaces
 import numpy as np
 from lxml import etree
 from minerl.env import comms, malmo
 from minerl.env.comms import retry
 from minerl.env.malmo import InstanceManager, malmo_version, launch_queue_logger_thread
-from minerl.env.observations import pov_observation, inventory_observation, compass_observation
+from minerl.env.observations import pov_observation, inventory_observation, compass_observation, mainhand_observation
+
+import minerl.herobraine.hero.spaces as spaces
+from minerl.herobraine.wrapper import EnvWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,8 @@ class MissionInitException(Exception):
 
 MAX_WAIT = 80  # After this many MALMO_BUSY's a timeout exception will be thrown
 SOCKTIME = 60.0 * 4  # After this much time a socket exception will be thrown.
-MINERL_CUSTOM_ENV_ID = 'MineRLCustomEnv' # Default id for a MineRLEnv
+MINERL_CUSTOM_ENV_ID = 'MineRLCustomEnv'  # Default id for a MineRLEnv
+TICK_LENGTH = 0.05
 
 
 class MineRLEnv(gym.Env):
@@ -104,18 +107,23 @@ class MineRLEnv(gym.Env):
         'pov': pov_observation,
         'inventory': inventory_observation,
         'compassAngle': compass_observation,
+        'mainhand': mainhand_observation,
     }
 
-    def __init__(self, xml, observation_space, action_space,
-                 docstr=None, obs_handlers=None):
+    def __init__(self, xml, observation_space, action_space, env_spec, port=None,
+                 noop_action=None, docstr=None, obs_handlers=None):
         self.action_space = action_space
         self.observation_space = observation_space
         self.obs_handlers = deepcopy(self.DEFAULT_OBS_HANDLERS)
         if obs_handlers is not None:
             self.obs_handlers.update(obs_handlers)
 
+        self.env_spec = env_spec
+        self._default_action = noop_action
+
         self.viewer = None
 
+        self._last_ac = None
         self.xml = None
         self.integratedServerPort = 0
         self.role = 0
@@ -136,8 +144,11 @@ class MineRLEnv(gym.Env):
         self.has_init = False
         self._seed = None
         self.had_to_clean = False
-
+        self._is_interacting = False
+        self._is_real_time = False
+        self._last_step_time = -1
         self._already_closed = False
+
         self.instance = self._robust_launch_new_instance()
 
         self.resets = 0
@@ -260,6 +271,17 @@ class MineRLEnv(gym.Env):
                                       })
             self.xml.insert(2, e)
 
+        if self._is_interacting:
+            hi = etree.fromstring("""
+                <HumanInteraction>
+                    <Port>{}</Port>
+                    <MaxPlayers>{}</MaxPlayers>
+                </HumanInteraction>""".format(self.interact_port, self.max_players))
+            # Update the xml
+
+            ss  = self.xml.find(".//" + self.ns + 'ServerSection')
+            ss.insert(0, hi)
+
         video_producers = self.xml.findall('.//' + self.ns + 'VideoProducer')
         assert len(video_producers) == self.agent_count
         video_producer = video_producers[self.role]
@@ -268,10 +290,27 @@ class MineRLEnv(gym.Env):
         self.height = int(video_producer.find(self.ns + 'Height').text)
         want_depth = video_producer.attrib["want_depth"]
         self.depth = 4 if want_depth is not None and (
-            want_depth == "true" or want_depth == "1" or want_depth is True) else 3
+                want_depth == "true" or want_depth == "1" or want_depth is True) else 3
         # print(etree.tostring(self.xml))
+        self._last_ac = None
+
 
         self.has_init = True
+
+
+    def noop_action(self):
+        """Gets the no-op action for the environment.
+
+        In addition one can get the no-op/default action directly from the action space.
+
+            env.action_space.noop()
+
+
+        Returns:
+            Any: A no-op action in the env's space.
+        """
+        return self.action_space.no_op()
+
 
     def _process_observation(self, pov, info):
         """
@@ -284,7 +323,7 @@ class MineRLEnv(gym.Env):
                 (self.height, self.width, self.depth), dtype=np.uint8)
         else:
             pov = pov.reshape((self.height, self.width, self.depth))[
-                ::-1, :, :]
+                  ::-1, :, :]
 
         if info:
             info = json.loads(info)
@@ -302,26 +341,46 @@ class MineRLEnv(gym.Env):
             print("Could not find handler for observation space {}, returning empty.".format(key))
             return {}
 
+        if isinstance(self.env_spec, EnvWrapper):
+            obs_dict = self.env_spec.wrap_observation(obs_dict)
+            
+         
+        self._last_pov = obs_dict['pov']
+        self._last_obs = obs_dict
+
         return obs_dict
 
     def _process_action(self, action_in) -> str:
         """
         Process the actions into a proper command.
         """
+        self._last_ac = action_in
         action_in = deepcopy(action_in)
+
+        if isinstance(self.env_spec, EnvWrapper):
+            action_in = self.env_spec.unwrap_action(action_in)
+
+        bottom_env_spec = self.env_spec
+        while isinstance(bottom_env_spec, EnvWrapper):
+            bottom_env_spec = bottom_env_spec.env_to_wrap
+
+
+        # TODO: Decide if we want to remove assertions.
         action_str = []
         for act in action_in:
             # Process enums.
-            if isinstance(self.action_space.spaces[act], minerl.env.spaces.Enum):
+
+            if isinstance(bottom_env_spec.action_space.spaces[act], spaces.Enum):
                 if np.issubdtype(type(action_in[act]), np.integer):
-                    action_in[act] = self.action_space.spaces[act].values[action_in[act]]
+                    action_in[act] = bottom_env_spec.action_space.spaces[act].values[action_in[act]]
                 else:
                     assert isinstance(
-                        action_in[act], str), "Enum action {} must be str or int. Value observed: {} ".format(act, action_in[act])
-                    assert action_in[act] in self.action_space.spaces[act].values, \
-                        "Invalid string value for enum action {}, {}".format(act, action_in[act])
+                        action_in[act], str), "Enum action {} must be str or int".format(act)
+                    assert action_in[act] in bottom_env_spec.action_space.spaces[
+                        act].values, "Invalid value for enum action {}, {}".format(
+                        act, action_in[act])
 
-            elif isinstance(self.action_space.spaces[act], gym.spaces.Box):
+            elif isinstance(bottom_env_spec.action_space.spaces[act], gym.spaces.Box):
                 subact = action_in[act]
                 assert not isinstance(
                     subact, str), "Box action {} is a string! It should be a ndarray: {}".format(act, subact)
@@ -332,11 +391,61 @@ class MineRLEnv(gym.Env):
                     subact = " ".join(str(x) for x in subact)
 
                 action_in[act] = subact
+            elif isinstance(bottom_env_spec.action_space.spaces[act], gym.spaces.Discrete):
+                action_in[act] = int(action_in[act])
 
             action_str.append(
                 "{} {}".format(act, str(action_in[act])))
+            
 
         return "\n".join(action_str)
+
+    def make_interactive(self, port, max_players=10, realtime=True):
+        """
+        Enables human interaction with the environment.
+
+        To interact with the environment add `make_interactive` to your agent's evaluation code
+        and then run the `minerl.interactor.`
+
+        For example:
+
+        .. code-block:: python
+
+            env = gym.make('MineRL...')
+            
+            # set the environment to allow interactive connections on port 6666
+            # and slow the tick speed to 6666.
+            env.make_interactive(port=6666, realtime=True) 
+
+            # reset the env
+            env.reset()
+            
+            # interact as normal.
+            ...
+
+
+        Then while the agent is running, you can start the interactor with the following command.
+
+        .. code-block:: bash
+
+            python3 -m minerl.interactor 6666 # replace with the port above.
+
+
+        The interactor will disconnect when the mission resets, but you can connect again with the same command.
+        If an interactor is already started, it won't need to be relaunched when running the commnad a second time.
+        
+
+        Args:
+            port (int):  The interaction port
+            realtime (bool, optional): If we should slow ticking to real time.. Defaults to True.
+            max_players (int): The maximum number of players
+
+        """
+        self._is_interacting = True
+        self._is_real_time = realtime
+        self.interact_port = port
+        self.max_players = max_players
+            
 
     @staticmethod
     def _hello(sock):
@@ -365,7 +474,6 @@ class MineRLEnv(gym.Env):
 
         try:
             if not self.client_socket:
-
                 logger.debug("Creating socket connection!")
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -407,7 +515,6 @@ class MineRLEnv(gym.Env):
             if self.instance:
                 self.instance.kill()
             self.instance = self._robust_launch_new_instance()
-                
             self.had_to_clean = False
         else:
             self.had_to_clean = True
@@ -438,6 +545,15 @@ class MineRLEnv(gym.Env):
                     "Something went wrong resetting the environment! "
                     "`done` was true on first frame.")
 
+        # See if there is an integrated port
+        if self._is_interacting:
+            port = self._find_server()
+            self.integratedServerPort = port
+            logger.warn("MineRL agent is public, connect on port {} with Minecraft 1.11".format(port))
+            # Todo make a launch command.
+            
+
+
         return self._process_observation(obs, info)
 
     def _quit_episode(self):
@@ -446,17 +562,24 @@ class MineRLEnv(gym.Env):
         ok, = struct.unpack('!I', reply)
         return ok != 0
 
-    def seed(self, seed=None):
+    def seed(self, seed=42, seed_spaces=True):
         """Seeds the environment!
+
+        This also seeds the aciton_space and observation_space sampling.
 
         Note:
         THIS MUST BE CALLED BEFORE :code:`env.reset()`
         
         Args:
-            seed (long, optional):  Defaults to None.
+            seed (long, optional):  Defaults to 42.
+            seed_spaces (bool, option): If the observation space and action space shoud be seeded. Defaults to True.
         """
         assert isinstance(seed, int), "Seed must be an int!"
         self._seed = seed
+        if seed_spaces:
+            self.observation_space.seed(self._seed)
+            self.action_space.seed(self._seed)
+
 
     def step(self, action):
 
@@ -468,8 +591,8 @@ class MineRLEnv(gym.Env):
             if not self.done:
 
                 step_message = "<Step" + str(MineRLEnv.STEP_OPTIONS) + ">" + \
-                    malmo_command + \
-                    "</Step" + str(MineRLEnv.STEP_OPTIONS) + " >"
+                               malmo_command + \
+                               "</Step" + str(MineRLEnv.STEP_OPTIONS) + " >"
 
                 # Send Actions.
                 comms.send_message(self.client_socket, step_message.encode())
@@ -491,6 +614,14 @@ class MineRLEnv(gym.Env):
                 # Process the observation and done state.
                 out_obs = self._process_observation(obs, info)
                 self.done = (done == 1)
+                
+                if self._is_real_time:
+                    t0 = time.time()
+                    # Todo: Add catch-up
+                    time.sleep(max(0, TICK_LENGTH - (t0 - self._last_step_time)))
+                    self._last_step_time = time.time()
+
+
 
                 return out_obs, reward, self.done, {}
             else:
@@ -506,41 +637,33 @@ class MineRLEnv(gym.Env):
                 "the info dictionary returned by the step function.")
             return self.observation_space.sample(), 0, self.done, {"error": "Connection timed out!"}
 
-    def _renderObs(self, obs):
+    def _renderObs(self, obs, ac=None):
         if self.viewer is None:
-            from gym.envs.classic_control import rendering
-            import pyglet
+            from minerl.viewer.trajectory_display import HumanTrajectoryDisplay, VectorTrajectoryDisplay
+            vector_display = 'Vector' in self.env_spec.name
+            header= self.env_spec.name
+            # TODO: env_specs should specify renderers.
+            instructions='{}.render()\n Actions listed below.'.format(header)
+            subtext = 'render'
+            cum_rewards=None
+            if not vector_display:
+                self.viewer= HumanTrajectoryDisplay(
+                    header, subtext, instructions=instructions,
+                    cum_rewards=cum_rewards)
 
-            class ScaledWindowImageViewer(rendering.SimpleImageViewer):
-                def __init__(self, width, height):
-                    super().__init__(None, 640)
+            else:
+                self.viewer= VectorTrajectoryDisplay(
+                    header, subtext, instructions=instructions,
+                    cum_rewards=cum_rewards)
+        # Todo: support more information to the render
+        self.viewer.render(obs, 0, 0, ac, 0, 1)
 
-                    if width > self.maxwidth:
-                        scale = self.maxwidth / width
-                        width = int(scale * width)
-                        height = int(scale * height)
-                    self.window = pyglet.window.Window(width=width, height=height, 
-                        display=self.display, vsync=False, resizable=True)            
-                    self.width = width
-                    self.height = height
-                    self.isopen = True
-
-                    @self.window.event
-                    def on_resize(width, height):
-                        self.width = width
-                        self.height = height
-
-                    @self.window.event
-                    def on_close():
-                        self.isopen = False
-
-            self.viewer = ScaledWindowImageViewer(self.width*4, self.height*4)
-        self.viewer.imshow(obs)
         return self.viewer.isopen
 
     def render(self, mode='human'):
-        if mode == 'human' and ('AICROWD_IS_GRADING' not in os.environ or os.environ['AICROWD_IS_GRADING'] is None):
-            self._renderObs(self._last_pov)
+        if mode == 'human' and (
+                not 'AICROWD_IS_GRADING' in os.environ or os.environ['AICROWD_IS_GRADING'] is None):
+            self._renderObs(self._last_obs, self._last_ac)
         return self._last_pov
 
     def is_closed(self):
@@ -603,20 +726,12 @@ class MineRLEnv(gym.Env):
                 sock, ("<Find>" + self._get_token() + "</Find>").encode())
             reply = comms.recv_message(sock)
             port, = struct.unpack('!I', reply)
-            if port == 0:
-                if time.time() - start_time > MAX_WAIT:
-                    if self.client_socket:
-                        self.client_socket.close()
-                        self.client_socket = None
-                    raise MissionInitException(
-                        'too long finding mission to join')
-                time.sleep(1)
         sock.close()
         # print("Found mission integrated server port " + str(port))
-        self.integratedServerPort = port
-        e = self.xml.find(self.ns + 'MinecraftServerConnection')
-        if e is not None:
-            e.attrib['port'] = str(self.integratedServerPort)
+        return  port
+        # e = self.xml.find(self.ns + 'MinecraftServerConnection')
+        # if e is not None:
+        #     e.attrib['port'] = str(self.integratedServerPort)
 
     def _init_mission(self):
         ok = 0
@@ -727,3 +842,131 @@ def tail(filename, lines=1, buffer=4098):
             block_counter *= 2
 
     return lines_found[-lines:]
+
+
+class TraceRecording(object):
+    _id_counter = 0
+
+    def __init__(self, directory=None):
+        """
+        Create a TraceRecording, writing into directory
+        """
+
+        if directory is None:
+            directory = os.path.join('/tmp', 'openai.gym.{}.{}'.format(time.time(), os.getpid()))
+            os.mkdir(directory)
+
+        self.directory = directory
+        self.file_prefix = 'openaigym.trace.{}.{}'.format(self._id_counter, os.getpid())
+        TraceRecording._id_counter += 1
+
+        self.closed = False
+
+        self.actions = []
+        self.observations = []
+        self.rewards = []
+        self.episode_id = 0
+
+        self.buffered_step_count = 0
+        self.buffer_batch_size = 100
+
+        self.episodes_first = 0
+        self.episodes = []
+        self.batches = []
+
+    def add_reset(self, observation):
+        assert not self.closed
+        self.end_episode()
+        self.observations.append(observation)
+
+    def add_step(self, action, observation, reward):
+        assert not self.closed
+        self.actions.append(action)
+        self.observations.append(observation)
+        self.rewards.append(reward)
+        self.buffered_step_count += 1
+
+    def end_episode(self):
+        """
+        if len(observations) == 0, nothing has happened yet.
+        If len(observations) == 1, then len(actions) == 0, and we have only called reset and done a null episode.
+        """
+        if len(self.observations) > 0:
+            if len(self.episodes) == 0:
+                self.episodes_first = self.episode_id
+
+            self.episodes.append({
+                'actions': optimize_list_of_ndarrays(self.actions),
+                'observations': optimize_list_of_ndarrays(self.observations),
+                'rewards': optimize_list_of_ndarrays(self.rewards),
+            })
+            self.actions = []
+            self.observations = []
+            self.rewards = []
+            self.episode_id += 1
+
+            if self.buffered_step_count >= self.buffer_batch_size:
+                self.save_complete()
+
+    def save_complete(self):
+        """
+        Save the latest batch and write a manifest listing all the batches.
+        We save the arrays as raw binary, in a format compatible with np.load.
+        We could possibly use numpy's compressed format, but the large observations we care about (VNC screens)
+        don't compress much, only by 30%, and it's a goal to be able to read the files from C++ or a browser someday.
+        """
+
+        batch_fn = '{}.ep{:09}.json'.format(self.file_prefix, self.episodes_first)
+        bin_fn = '{}.ep{:09}.bin'.format(self.file_prefix, self.episodes_first)
+
+        with atomic_write.atomic_write(os.path.join(self.directory, batch_fn), False) as batch_f:
+            with atomic_write.atomic_write(os.path.join(self.directory, bin_fn), True) as bin_f:
+
+                def json_encode(obj):
+                    if isinstance(obj, np.ndarray):
+                        offset = bin_f.tell()
+                        while offset % 8 != 0:
+                            bin_f.write(b'\x00')
+                            offset += 1
+                        obj.tofile(bin_f)
+                        size = bin_f.tell() - offset
+                        return {'__type': 'ndarray', 'shape': obj.shape, 'order': 'C', 'dtype': str(obj.dtype),
+                                'npyfile': bin_fn, 'npyoff': offset, 'size': size}
+                    return obj
+
+                json.dump({'episodes': self.episodes}, batch_f, default=json_encode)
+
+                bytes_per_step = float(bin_f.tell() + batch_f.tell()) / float(self.buffered_step_count)
+
+        self.batches.append({
+            'first': self.episodes_first,
+            'len': len(self.episodes),
+            'fn': batch_fn})
+
+        manifest = {'batches': self.batches}
+        manifest_fn = os.path.join(self.directory, '{}.manifest.json'.format(self.file_prefix))
+        with atomic_write.atomic_write(os.path.join(self.directory, manifest_fn), False) as f:
+            json.dump(manifest, f)
+
+        # Adjust batch size, aiming for 5 MB per file.
+        # This seems like a reasonable tradeoff between:
+        #   writing speed (not too much overhead creating small files)
+        #   local memory usage (buffering an entire batch before writing)
+        #   random read access (loading the whole file isn't too much work when just grabbing one episode)
+        self.buffer_batch_size = max(1, min(50000, int(5000000 / bytes_per_step + 1)))
+
+        self.episodes = []
+        self.episodes_first = None
+        self.buffered_step_count = 0
+
+    def close(self):
+        """
+        Flush any buffered data to disk and close. It should get called automatically at program exit time, but
+        you can free up memory by calling it explicitly when you're done
+        """
+        if not self.closed:
+            self.end_episode()
+            if len(self.episodes) > 0:
+                self.save_complete()
+            self.closed = True
+            logger.info('Wrote traces to %s', self.directory)
