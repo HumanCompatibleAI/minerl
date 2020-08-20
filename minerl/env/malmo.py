@@ -327,9 +327,7 @@ class InstanceManager:
         # `java.BindException`, and MineRLEnv will request a new Minecraft
         # instance if the port is unavailable upon launch.
         port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
-        while (cls._is_port_taken(port) or
-                cls._is_display_port_taken(port - cls._malmo_base_port, cls.X11_DIR) or
-                cls._port_in_instance_pool(port)):
+        while  cls._is_port_taken(port) or cls._port_in_instance_pool(port):
             port = random.randrange(IANA_DYNAMIC_PORT_LOW, IANA_DYNAMIC_PORT_HIGH)
 
         return port

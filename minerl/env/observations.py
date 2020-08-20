@@ -1,7 +1,7 @@
 from copy import deepcopy
 import os
 import functools
-import np
+import numpy as np
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
