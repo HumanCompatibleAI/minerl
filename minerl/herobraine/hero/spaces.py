@@ -422,7 +422,7 @@ class Dict(gym.spaces.Dict, MineRLSpace):
 class MultiDiscrete(gym.spaces.MultiDiscrete, MineRLSpace):
     def __init__(self, *args, **kwargs):
         super(MultiDiscrete, self).__init__(*args, **kwargs)
-        self.eyes = [np.eye(n, dtype=np.float32) for n in self.nvec]
+        self.eyes = [np.eye(n, dtype=np.float32) for n in np.nditer(self.nvec)]
 
     def no_op(self, batch_shape=()):
         return (np.zeros(list(batch_shape) + list(self.nvec.shape)) * self.nvec).astype(self.dtype)
@@ -434,16 +434,16 @@ class MultiDiscrete(gym.spaces.MultiDiscrete, MineRLSpace):
 
     def flat_map(self, x):
         return np.concatenate(
-            [self.eyes[i][x[..., i]] for i in range(len(self.nvec))],
+            [self.eyes[i][n] for i, n in enumerate(np.nditer(x))],
             axis=-1)
 
     def unmap(self, x):
         cur_index = 0
         out = []
-        for n in self.nvec:
+        for n in np.nditer(self.nvec):
             out.append(np.argmax(x[..., cur_index:cur_index + n], axis=-1)[..., np.newaxis])
             cur_index += n
-        return np.concatenate(out, axis=-1).astype(self.dtype)
+        return np.reshape(np.concatenate(out, axis=-1).astype(self.dtype), self.nvec.shape)
 
     def sample(self, bs=None):
         bdim = () if bs is None else (bs,)
