@@ -396,7 +396,6 @@ class MineRLEnv(gym.Env):
 
             action_str.append(
                 "{} {}".format(act, str(action_in[act])))
-            
 
         return "\n".join(action_str)
 

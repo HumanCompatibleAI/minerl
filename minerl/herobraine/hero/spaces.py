@@ -243,7 +243,10 @@ class Enum(Discrete, MineRLSpace):
             values = (values,)
         self.default = default if default is not None else values[0]
         super().__init__(len(values))
-        self.values = np.array(sorted(values))
+        # Don't sort - doesn't get anything, introduces an arbitrary ordering,
+        #               makes using environment manually harder.
+        # self.values = np.array(sorted(values))
+        self.values = np.array(values)
         self.value_map = dict(zip(self.values, range(len(values))))
 
     def sample(self, bs=None) -> int:
