@@ -259,7 +259,9 @@ class Enum(Discrete, MineRLSpace):
         Returns:
             int:  A random index for one of the enum types.
         """
-        return self.values[super().sample(bs)]
+        return super().sample(bs)
+        # Documentation indicates to return an int.
+        # return self.values[super().sample(bs)]
 
     def flat_map(self, x):
         return super().flat_map(self[x])
